@@ -9,7 +9,7 @@ disable-model-invocation: true
 This playbook makes a CI pipeline faster and cheaper while keeping what it
 proves. It comes from a large TypeScript monorepo with a busy main branch,
 many agent-written PRs a day and thousands of CI jobs a day. CI there went
-from several hundred dollars a day to around ten, and typical PR runs from
+from several hundred dollars a day to under ten, and typical PR runs from
 many minutes to a couple.
 
 Terms used throughout: a **lane** is one suite or group of jobs a workflow
@@ -29,7 +29,7 @@ The levers, roughly in the order they paid off:
    several times slower than what replaced them.
 6. Put jobs on cheaper, warmer machines. Reused sandbox runners turned a
    job that spent minutes on setup into one that spends seconds, and cut the
-   daily runner bill from a few tens of dollars to around ten.
+   daily runner bill from a few tens of dollars to a few.
 
 Each lever has a reference with the detail. `references/stale-defaults.md` is
 the quickest read: the defaults that look reasonable and cost the most.

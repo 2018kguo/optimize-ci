@@ -3,7 +3,7 @@
 A playbook for making a busy CI pipeline faster and cheaper without letting
 regressions through. It comes from months of work on a large TypeScript
 monorepo with a busy main branch and many agent-written PRs a day, where CI
-went from several hundred dollars a day to around ten. It covers what
+went from several hundred dollars a day to under ten. It covers what
 actually moved the numbers:
 
 - measuring first, and reading noisy runner numbers correctly
@@ -19,7 +19,7 @@ actually moved the numbers:
   typecheckers) and a list of stale defaults agents still reach for
 - sizing runners by billed minutes, and running jobs on reused
   [Boat](https://docs.boat.dev) sandbox runners: a daily runner bill of
-  around ten dollars instead of a few tens, with warm jobs spending seconds
+  a few dollars instead of a few tens, with warm jobs spending seconds
   on setup instead of minutes
 
 ```bash

@@ -17,11 +17,14 @@ pool during working hours (described below):
 
 | | Managed runner provider | Reused Boat runners |
 |---|---|---|
-| Runner cost per day | A few tens of dollars | Around ten dollars, most of it the warm pool and the plan fee; job compute alone is roughly an order of magnitude cheaper |
+| Runner cost per day (machine time) | A few tens of dollars | A few dollars: a small warm pool plus job time, which alone is roughly an order of magnitude cheaper |
 | Checkout plus install on a warm job | Several seconds to tens of seconds (disk mounts, mirror checkout, install reconcile) | A second or two each |
 | Same job on a fresh machine | About a minute or two of setup | Similar or worse (a fresh sandbox's snapshot hydrates lazily); avoid it |
 | Queue wait for a job | Seconds | Near zero on an idle runner; tens of seconds when a new runner has to start |
 | Heavy test lanes | Baseline | Comparable per core; the win is setup and price, not test bodies |
+
+Costs here are machine time. Boat's plan fee comes back as sandbox time, so
+at these volumes it is part of the same spend, not overhead on top.
 
 Where the savings come from: per-second billing on cheap fast hardware, and
 runners that keep their workspace, git objects, `node_modules` and package
