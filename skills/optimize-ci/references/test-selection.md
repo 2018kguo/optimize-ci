@@ -69,12 +69,12 @@ diff ─▶ import graph ─▶ candidate tests
              group by folder + filename prefix
                             │
           ┌─────────┬───────┴───┬──────────┐
-       grid/*    chat/*     billing/*   auth/*      one question per area
+        api/*     ui/*       db/*      docs/*       one question per area
        p 0.81    p 0.06     p 0.64      p 0.03      keep areas above a low bar
           │                    │
    ┌──────┼──────┐          ┌──┴───┐
- sort   paste  theme      total  limits             one question per test
- 0.97   0.93   0.41       0.95   0.22               run tests above a high bar
+ routes  auth  errors     query  migrate            one question per test
+ 0.97    0.93   0.41      0.95    0.22              run tests above a high bar
 ```
 
 Two round trips cover a large fan-out: all area questions at once, then all
