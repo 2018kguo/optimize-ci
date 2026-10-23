@@ -35,7 +35,7 @@ whenever main moves. Diffing against it makes every global file that landed
 on main since then look like the PR's own change, and forces every lane. The
 right base is the merge commit's first parent, `HEAD^1`, which is exactly the
 main being tested. Check out with `fetch-depth: 2` so it exists. This mistake
-is easy to make and expensive: it can quietly make most PRs run everything.
+is easy to make and expensive: it can make most PRs run everything.
 
 **Gate downstream jobs so an empty output runs the lane.** Write every lane
 condition as `steps.select.outputs.backend != 'false'`, not `== 'true'`. If
@@ -106,7 +106,7 @@ Pick one, write it down, and test it:
   loud warning. Usually the right choice: cheap, catches the obvious
   breakage, and the scheduled full run catches the rest.
 - **Everything:** safest, but if refusal paths fire often, a large share of
-  PRs end up running everything, which quietly undoes the selection.
+  PRs end up running everything, which undoes the selection.
 
 Check the selector's own PR log by hand. A PR that changes the selector is
 usually forced onto the wide path, so it never exercises the narrow path it

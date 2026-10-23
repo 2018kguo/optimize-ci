@@ -1,79 +1,75 @@
 # optimize-ci
 
-A playbook for making a busy CI pipeline faster and cheaper without letting
-regressions through. It comes from months of work on a large TypeScript
-monorepo with a busy main branch and many agent-written PRs a day, where CI
-went from several hundred dollars a day to under ten. It covers what
-actually moved the numbers:
+How we made CI on a busy TypeScript monorepo about 10x cheaper and a lot
+faster, written up as a skill an agent can follow on your repo.
 
-- measuring first, and reading noisy runner numbers correctly
-- cutting test CPU at the source (loader and process boot, duplicate tests,
-  real sleeps)
-- selecting tests per diff with a fail-closed lane selector and an import
-  graph filtered by a cheap classifier model, guarded by a replay of real
-  historical catches, with a scheduled full run and red-main alerts as the
-  backstop
-- git transport and checkout fixes, keeping dependency trees warm, and cache
-  keys that silently never hit
-- current tool choices (oxlint, oxfmt, oxc-based TS loaders, native
-  typecheckers) and a list of stale defaults agents still reach for
-- sizing runners by billed minutes, and running jobs on reused
-  [Boat](https://docs.boat.dev) sandbox runners: a daily runner bill of
-  a few dollars instead of a few tens, with warm jobs spending seconds
-  on setup instead of minutes
+CI is on a lot of engineers' minds right now. Agents open far more PRs than
+people did, and every one of them runs the pipeline. Ours got slow and
+expensive, so we spent a few months on it. What made the difference:
+
+- **Running only what the diff can affect.** Walk the import graph from the
+  diff, then have a cheap model keep the tests that actually run the changed
+  code. A replay of real past failures checks recall, and the full suite
+  still runs every few hours.
+- **Cutting test CPU.** TS loaders and a process per test file cost more than
+  the tests themselves.
+- **Newer tools.** oxlint, oxfmt, oxc-based loaders and native typecheckers
+  instead of ESLint, Prettier, tsx and `tsc --noEmit`.
+- **Git and caches.** HTTP/1.1 for git fixed checkouts that sometimes took
+  ten minutes, and a warm `node_modules` made installs take seconds.
+- **Moving from Blacksmith to [Boat](https://docs.boat.dev).** Reused sandbox
+  runners keep the workspace between jobs, so setup takes a second or two,
+  and runner time costs about a tenth as much. The autoscaler we use is in
+  the repo.
+
+Our stack: Bun, Node 24, TypeScript, Turbo, Vitest, node:test, bun test,
+Playwright, Postgres, GitHub Actions, Boat runners, and AWS Lambda plus
+OpenTofu for the runner autoscaler. If yours looks similar, most of this
+carries over as is.
 
 ```bash
 npx skills add 2018kguo/optimize-ci
 ```
 
-It never loads on its own. Start it when you want it:
+It only runs when you ask for it:
 
 ```
 /optimize-ci
 ```
 
-A good first request keeps everything read-only until you've seen the plan:
+A good first request keeps it read-only until you've seen the plan:
 
 ```
-/optimize-ci measure where our CI time and money go over the last week of
-runs and propose the first three changes. Don't change anything yet.
+/optimize-ci measure where our CI time and money went over the last week
+and suggest the first three changes. Don't change anything yet.
 ```
-
-## Reading it yourself
-
-For the quickest value, read `references/stale-defaults.md` (one table) and
-the lever list and checks in `SKILL.md`. Then read the reference for whichever
-lever your measurements point to.
 
 ## What's in it
 
-`skills/optimize-ci/SKILL.md` is the entry point: the order of the work,
-where an agent should stop and ask, and the checks that matter most.
+`skills/optimize-ci/SKILL.md` is the entry point: the order we did things
+in, when the agent should stop and ask, and the checks we'd keep.
 
-The `references` folder:
+The references:
 
-- `measure.md`: per-job CPU, memory and pressure; per-run timing reports;
-  reading noise
-- `test-cpu.md`: profiling the CI command's process tree and where TypeScript
-  suites spend CPU; flakes
-- `test-selection.md`: fail-closed lane selection, graph plus classifier test
-  selection, recall replays, failure modes, main and scheduled runs,
-  cancellation, alerts, debounces and merge queues
-- `git-and-caching.md`: HTTP/1.1 for git, checkout depth and filters, warm
-  dependency trees, cache writers and trust, keys that never hit, task
-  runner and Docker caches
-- `tool-choices.md`: lint, format, TS execution, typecheckers, package
-  manager, test runners
-- `stale-defaults.md`: defaults that look reasonable and cost the most
-- `runners.md`: billing math, sizing, sharding, parallel setup steps
-- `boat-runners.md`: reused sandbox runners on Boat, before and after,
-  architecture, single-use runners for privileged jobs, gotchas, moving
-  workflows over
-- `guardrails.md`: tests that keep each win from quietly undoing itself
+- `measure.md`: per-job CPU and memory sampling, timing reports, reading
+  noisy numbers
+- `test-cpu.md`: profiling what CI actually runs, and where TypeScript test
+  suites spend their CPU
+- `test-selection.md`: lane selection, picking tests with an import graph and
+  a model, the replay check, scheduled full runs, never cancelling main,
+  red-main alerts
+- `git-and-caching.md`: HTTP/1.1 for git, checkout depth and sparse
+  checkouts, keeping dependencies warm, cache keys that never hit, Turbo and
+  Docker caches
+- `tool-choices.md`: lint, format, running TS, typecheckers, test runners
+- `stale-defaults.md`: one table of defaults that cost the most
+- `runners.md`: billing math, sizing, sharding, running setup in parallel
+- `boat-runners.md`: the Boat setup, before and after, single-use runners
+  for deploy jobs, gotchas, moving workflows over
+- `guardrails.md`: tests that keep all of the above from getting undone
 
-`scripts/boat-runners/` is a working runner autoscaler for Boat on AWS (a
-Lambda function, SQS and a schedule, as an OpenTofu stack), with tests and a
-setup guide.
+`scripts/boat-runners/` is the runner autoscaler: a Lambda function, SQS and
+a schedule, as an OpenTofu stack, with tests and a setup guide.
 
 ## License
 

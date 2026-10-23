@@ -76,7 +76,7 @@ Two local traps when simulating CI checkouts:
 Run every git command in CI tooling through a helper that clears inherited
 git environment variables (`GIT_DIR`, `GIT_INDEX_FILE`, `GIT_WORK_TREE`,
 `GIT_CONFIG_*` pairs). Tools invoked from a git hook inherit them, and
-`git ls-files` then quietly reads a different index.
+`git ls-files` then reads a different index.
 
 ## Never let the dependency tree go cold
 

@@ -15,7 +15,7 @@ leave anything behind on a reused machine.
 Ballparks for the same workflows at a few thousand jobs a day, with a warm
 pool during working hours (described below):
 
-| | Managed runner provider | Reused Boat runners |
+| | Blacksmith | Reused Boat runners |
 |---|---|---|
 | Runner cost per day (machine time) | A few tens of dollars | A few dollars: a small warm pool plus job time, which alone is roughly an order of magnitude cheaper |
 | Checkout plus install on a warm job | Several seconds to tens of seconds (disk mounts, mirror checkout, install reconcile) | A second or two each |

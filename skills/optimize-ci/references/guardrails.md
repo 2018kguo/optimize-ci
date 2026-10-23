@@ -1,6 +1,6 @@
 # Guardrails that keep CI honest
 
-Every optimization in this playbook has a way to quietly undo itself or to
+Every optimization in this playbook has a way to undo itself or to
 make CI pass while proving less. These checks catch that. Write them as
 tests that assert behavior, not spelling: a test that greps the YAML for an
 exact string passes when someone rewrites the line into something that
