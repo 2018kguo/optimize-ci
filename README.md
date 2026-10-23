@@ -20,6 +20,10 @@ expensive, so we went after it. What made the difference:
 - **Counting what each suite actually caught.** Most of the red on PRs from
   the heavy suites was flakes and infrastructure, which is what made it safe
   to stop running them on every PR.
+- **Keeping main honest.** Main runs never get cancelled by a later merge, a
+  message goes out when main goes red, a required check can't pass while
+  running zero tests, and a quick pre-push check catches the cheap failures
+  before they use a runner.
 - **Newer tools.** oxlint, oxfmt, oxc-based loaders and native typecheckers
   instead of ESLint, Prettier, tsx and `tsc --noEmit`.
 - **Git and caches.** HTTP/1.1 for git fixed checkouts that sometimes took

@@ -84,6 +84,34 @@ distinct cases. Ask before deleting (`SKILL.md`).
 per pattern, a formatter per directory) add up. One `git grep` in process,
 one batched lint call or one git diff replaced dozens of spawns each.
 
+## Harness waste
+
+Some of the biggest wins came from what the test harness did around the
+tests:
+
+- **Serve route tests from a production build.** Booting the framework's dev
+  server for each suite took tens of seconds per origin. Building once per
+  job in the background and starting the built server took about a second.
+  Bundle the development build of your UI library if tests rely on its dev
+  behavior.
+- **A teardown that closes shared clients hangs everything after it.** One
+  helper closed every database client the process had registered, so after
+  the first file every later file sat until its timeout. The job looked slow;
+  it was walking file after file at the full timeout.
+- **Browser suites set up a lot they don't need.** Check for debug features
+  left on (a worker writing heap dumps every few seconds), warm-up requests
+  that redirect to a login page and warm nothing, and the same warm-up
+  repeated per test.
+- **Share one service stack across browser workers** instead of starting a
+  stack per worker. It cut CPU a lot for a little more wall time and half the
+  runners. Going further (one stack, more workers) made contention worse.
+- **Record traces only on retry.** Recording on every run costs time on runs
+  that pass.
+- **Bound waits by progress, not elapsed time.** A dev-server harness whose
+  timeout kept getting raised was slow because a cold dependency optimizer
+  pre-bundled things no test needed. Removing that work fixed it; the bigger
+  timeouts never did.
+
 ## Things that didn't help
 
 - More concurrency inside a file on a CPU-bound runner. On a saturated box

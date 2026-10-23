@@ -173,6 +173,22 @@ Read the setup action's logs once. Defaults often disable caching:
 - A task graph query (`--graph`) is much cheaper than a dry run that hashes
   every input, if edges are all you need.
 
+## The local loop
+
+- **Pre-commit formats and lints only staged files.** Running the full check
+  suite on commit trains people (and agents) to skip it.
+- **Exclude nested worktrees and agent directories from every tool's file
+  walk.** Agents create worktrees inside the repo, and globs that walk them
+  made local formatting and task hashing take far longer, and changed task
+  hashes from gitignored files alone.
+- **Run a short pre-push profile** (format, lint and typecheck of changed
+  files) so the cheap failures never reach CI (`guardrails.md`).
+
+## Preview deploys
+
+Build previews only for apps the diff touches. Building every app on every
+push filled the runner queue for everyone else.
+
 ## Docker and image builds
 
 - **Per-deploy values in an early layer's cache key disable layer reuse.** A
@@ -183,6 +199,8 @@ Read the setup action's logs once. Defaults often disable caching:
   worktrees, agent directories, `node_modules`.
 - Install only the service's own dependency tree (a filtered install), and
   don't re-run checks in the image build that required CI already proved.
+- Pin CI's runtime (Node, Bun) to production's exact version. A floating
+  minor version behaves differently in ways tests won't catch.
 - CI installs the whole workspace; production images often install a
   filtered subset. A tool that only works because a root devDependency is
   hoisted passes CI and fails in the image. Smoke-build every service whose

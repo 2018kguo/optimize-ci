@@ -39,11 +39,15 @@ by the second; we register them as GitHub Actions runners.
 4. **Git and caches.** Forcing git onto HTTP/1.1 fixed checkouts that
    sometimes took over ten minutes. Keeping `node_modules` warm made installs
    take seconds. See `references/git-and-caching.md`.
-5. **Newer tools.** oxlint, oxfmt, oxc-based TS loaders, and native
+5. **Keeping main honest.** A later merge never cancels a main run, a
+   message goes out when main goes red, a required check can't pass with zero
+   tests, and a pre-push check catches the cheap failures. See
+   `references/guardrails.md`.
+6. **Newer tools.** oxlint, oxfmt, oxc-based TS loaders, and native
    typecheckers in place of ESLint, Prettier, tsx and `tsc --noEmit`. See
    `references/tool-choices.md`, and `references/stale-defaults.md` for the
    defaults agents still reach for.
-6. **Moving from Blacksmith to Boat.** Reused sandbox runners keep the
+7. **Moving from Blacksmith to Boat.** Reused sandbox runners keep the
    workspace between jobs, so setup takes a second or two, and runner time
    costs roughly a tenth as much. See `references/boat-runners.md` and the
    autoscaler in `scripts/boat-runners/`.
