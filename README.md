@@ -2,9 +2,10 @@
 
 A playbook for making CI on a busy repository faster and cheaper without
 letting more bugs through. It comes from a TypeScript monorepo where coding
-agents open a lot of the PRs and CI runs thousands of jobs a day. We got CI
-to about a tenth of what it cost, with a typical PR checked in a couple of
-minutes. It includes the order the work paid off in, the checks that keep
+agents open a lot of the PRs and CI runs thousands of jobs a day. CI now
+costs about a tenth of what it did, and a typical PR is checked in a couple
+of minutes. Runner spend alone went from a few tens of dollars a day to a few
+dollars. It includes the order the work paid off in, the checks that keep
 each change from undoing itself, the defaults agents still reach for
 that cost the most, and the runner autoscaler we moved to when we left
 Blacksmith for [Boat](https://docs.boat.dev).
@@ -38,17 +39,7 @@ Narrower requests work too:
 ```
 /optimize-ci profile our backend test lane and tell me what the CPU is
 spent on.
-
-/optimize-ci we're moving to Boat runners. Check our workflows for the
-things that break on reused runners.
 ```
-
-## Reading it yourself
-
-To get the whole picture in about ten minutes, read "What moved the needle"
-and "Stop and ask before" in `SKILL.md`, the table in `stale-defaults.md`,
-and the first two sections of `boat-runners.md`. Everything else is detail
-for when you reach that step.
 
 ## What we changed
 
@@ -62,8 +53,8 @@ The changes that made the real difference:
 
 - **We stopped running every test on every PR.** Static checks always run.
   For tests, we walk the import graph from the diff and ask a decision model
-  (a fast classifier like Jev that answers yes/no questions with a
-  probability) which tests actually execute the changed code, folders first
+  (a fast classifier like Jev, on OpenRouter's Decisions API, that answers
+  yes/no questions with a probability) which tests actually execute the changed code, folders first
   and then single tests. A replay of real past failures checks that we still
   catch them, and the full suite runs on a schedule.
 - **We profiled the tests and cut what didn't earn its keep.** TS loaders and
@@ -76,9 +67,16 @@ The changes that made the real difference:
   typecheckers instead of ESLint, Prettier, tsx and `tsc --noEmit`.
 - **We fixed git and caches.** Forcing git onto HTTP/1.1 fixed checkouts that
   sometimes took ten minutes.
-- **We moved from Blacksmith to Boat.** Machine time costs roughly a tenth as
-  much, and our runners stay up between jobs, so a warm job spends a second
-  or two on checkout and install.
+- **We moved from Blacksmith to Boat.** Its machines are roughly an order of
+  magnitude cheaper per minute, and our runners stay up between jobs, so a
+  warm job spends a second or two on checkout and install.
+
+## Reading it yourself
+
+To get the whole picture in about ten minutes, read "What moved the needle"
+and "Stop and ask before" in `SKILL.md`, the table in `stale-defaults.md`,
+and the first two sections of `boat-runners.md`. Everything else is detail
+for when you reach that step.
 
 ## What's in it
 
