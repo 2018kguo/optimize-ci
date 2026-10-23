@@ -33,8 +33,9 @@ by the second; we register them as GitHub Actions runners.
    the heavy suites' red was flakes. See `references/test-cpu.md` and
    `references/measure.md`.
 3. **Running only what the diff can affect.** We walk the import graph from
-   the diff, then a cheap model keeps the tests that actually run the changed
-   code. A replay of real past failures checks that we still catch them, and
+   the diff, then a decision model (a fast classifier that returns a
+   probability per yes/no question, like Jev) picks the tests that actually
+   run the changed code, asking about folders first and then single tests. A replay of real past failures checks that we still catch them, and
    the full suite runs every few hours. See `references/test-selection.md`.
 4. **Git and caches.** Forcing git onto HTTP/1.1 fixed checkouts that
    sometimes took over ten minutes. Keeping `node_modules` warm made installs

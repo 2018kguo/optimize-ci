@@ -42,7 +42,7 @@ condition as `steps.select.outputs.backend != 'false'`, not `== 'true'`. If
 the selector dies before writing outputs, the lane runs. Mark these
 conditions as load-bearing in comments, because they look like a typo.
 
-## Layer 2: tests, from a graph filtered by a classifier
+## Layer 2: tests, from a graph filtered by a decision model
 
 Within a lane, select test files.
 
@@ -54,10 +54,32 @@ edges too: tests that read a sibling file by literal path, or spawn a helper
 script. A typical PR in a monorepo reaches a large share of all tests through
 hub modules, so the graph alone selects too much.
 
-**Filter with a cheap classifier.** Ask one yes/no question per candidate
-test, batched, to a small fast model. Each question carries the test's case
-titles and the import chain from the change to the test; the shared context
-carries the changed hunks, budgeted and split across files.
+**Filter with a decision model.** A decision model takes a batch of yes/no
+questions plus some shared context and returns a probability for each one,
+fast and cheap. OpenRouter's Decisions API serves several, including Jev and
+GPT Luna Decisions. Each question names one candidate test and carries its
+case titles and the import chain from the change to the test. The shared
+context carries the changed hunks, budgeted and split across files.
+
+Route it like a tree rather than asking about every file:
+
+```
+diff ─▶ import graph ─▶ candidate tests
+                            │
+             group by folder + filename prefix
+                            │
+          ┌─────────┬───────┴───┬──────────┐
+       grid/*    chat/*     billing/*   auth/*      one question per area
+       p 0.81    p 0.06     p 0.64      p 0.03      keep areas above a low bar
+          │                    │
+   ┌──────┼──────┐          ┌──┴───┐
+ sort   paste  theme      total  limits             one question per test
+ 0.97   0.93   0.41       0.95   0.22               run tests above a high bar
+```
+
+Two round trips cover a large fan-out: all area questions at once, then all
+file questions for the kept areas at once. Keep the area bar low (an area
+only needs one test that runs the change) and the test bar high.
 
 - Ask whether the test's cases execute the changed code, not whether the
   change could make the test fail. Models assume the diff is correct, so the
@@ -65,8 +87,6 @@ carries the changed hunks, budgeted and split across files.
   raised their scores a lot.
 - Keep batches small (accuracy drops as batches grow), send them in parallel,
   give the whole step a short deadline, and cap the number of questions.
-- Walk areas first: group tests by directory and name prefix, ask once per
-  large group, and ask file by file only inside groups the model kept.
 - Always run changed tests. Run direct importers of a changed file unless
   there are too many of them, in which case the model filters those too.
 - Treat a refused or malformed answer as "relevant", salvage the rest of the
@@ -90,7 +110,7 @@ was bound by per-file boot, not test bodies.
 Record a set of real historical revisions where a test caught a real bug:
 the commit, the diff, the failing tests, the original run. A test replays the
 selector against them and fails CI if recall drops below a floor, if named
-must-catch revisions stop being caught, or if the classifier stops selecting
+must-catch revisions stop being caught, or if the decision model stops selecting
 fewer files than the graph alone. Changing the prompt or the graph code
 forces re-recording, so the floor is always measured against the current
 selector.

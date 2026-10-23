@@ -8,8 +8,10 @@ people did, and every one of them runs the pipeline. Ours got slow and
 expensive, so we went after it. What made the difference:
 
 - **Running only what the diff can affect.** Walk the import graph from the
-  diff, then have a cheap model keep the tests that actually run the changed
-  code. A replay of real past failures checks recall, and the full suite
+  diff, then ask a decision model (a fast classifier that returns a
+  probability per yes/no question, like Jev) which tests actually run the
+  changed code: folders first, then single tests inside the folders it
+  keeps. A replay of real past failures checks recall, and the full suite
   still runs every few hours.
 - **Profiling the tests and cutting what didn't earn its keep.** We profiled
   the exact commands CI runs and fixed whatever sat on top: TS loaders and a

@@ -60,7 +60,7 @@ test go red.
 ## Selection recall
 
 A replay of recorded real catches with a floor, named must-catch revisions
-and a rule that the classifier selects fewer files than the graph
+and a rule that the decision model selects fewer files than the graph
 (`test-selection.md`). Re-record when the prompt or graph code changes.
 
 ## Deterministic ratchets, never timing gates

@@ -148,7 +148,7 @@ Read the setup action's logs once. Defaults often disable caching:
   runners that aren't GitHub-hosted. Set `enable-cache: true`.
 - Build output caches keyed on a whole directory bust on every test or doc
   edit. Hash only build inputs.
-- Bounded caches for derived data (an import-graph parse cache, classifier
+- Bounded caches for derived data (an import-graph parse cache, decision-model
   answers, a list of client bundle modules, typecheck build info): key on
   the commit, restore by prefix, write from main only.
 
