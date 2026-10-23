@@ -21,6 +21,30 @@ A **lane** below means one suite a workflow can run or skip (backend tests,
 web tests, end-to-end). [Boat](https://docs.boat.dev) rents Linux sandboxes
 by the second; we register them as GitHub Actions runners.
 
+## Table stakes first
+
+These are cheap, most fast pipelines already do them, and they're easy to
+miss. Check each one before the bigger work below.
+
+- **Only run a job when its inputs changed.** Path filters on workflows, and
+  your task runner's affected-only mode (`turbo run --affected`, `nx affected`)
+  for monorepos. Make it run everything when it can't tell
+  (`references/test-selection.md`).
+- **Cancel superseded PR runs.** A new push to a PR cancels the run in
+  progress. Never do this on main (`references/test-selection.md`).
+- **Cache between runs.** The package manager's store, task outputs through a
+  remote cache (Turbo, Nx), and build artifacts. One job writes each cache;
+  the rest only read (`references/git-and-caching.md`).
+- **Shard by measured test time,** not by file count, so shards finish
+  together. Refresh the timings from recent green runs (`references/runners.md`).
+- **Run independent jobs in parallel,** with the cheap static checks (format,
+  lint, typecheck) failing fast instead of waiting behind the slow suites.
+- **Set a timeout on every job,** so a hung test costs minutes, not the
+  provider's six-hour default.
+- **Keep light jobs on small runners,** and size heavy ones from their CPU
+  use (`references/runners.md`).
+- **Pin tool and runtime versions** to what production runs.
+
 ## What moved the needle
 
 1. **Measuring first.** Most of our guesses about where the time went were

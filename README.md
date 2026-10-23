@@ -5,7 +5,10 @@ faster, written up as a skill an agent can follow on your repo.
 
 CI is on a lot of engineers' minds right now. Agents open far more PRs than
 people did, and every one of them runs the pipeline. Ours got slow and
-expensive, so we went after it. What made the difference:
+expensive, so we went after it. The skill starts with the table stakes
+(only running jobs whose inputs changed, cancelling superseded PR runs,
+caching, sharding by measured test time, timeouts), then what made the real
+difference:
 
 - **Running only what the diff can affect.** Walk the import graph from the
   diff, then ask a decision model (a fast classifier that returns a
