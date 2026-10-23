@@ -117,7 +117,7 @@ nothing.
 4. Fix git transport, checkout depth, the dependency cache and cache keys.
 5. Swap tools after checking the output matches.
 6. Size runners by what you're billed, then try reused sandbox runners.
-7. Add the guardrail tests, so none of this quietly gets undone.
+7. Add the guardrail tests, so none of this gets undone later.
 
 ## Stop and ask before
 
