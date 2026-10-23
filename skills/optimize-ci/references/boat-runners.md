@@ -1,51 +1,54 @@
 # Reused sandbox runners on Boat
 
-[Boat](https://docs.boat.dev) rents fast Linux sandboxes by the second through
-an API, with named snapshots to start from. Registered as GitHub Actions
-self-hosted runners and reused across jobs, they can take every Linux x64
-job off a managed runner provider.
+[Boat](https://docs.boat.dev) rents full root Ubuntu machines that are ready in
+seconds, billed per second, with named snapshots to start new machines from.
+We moved every Linux x64 job from Blacksmith to Boat sandboxes registered as
+GitHub Actions runners.
 
-Reused self-hosted runners are only safe for repositories where everyone who
-can open a PR that runs workflows is trusted: private repositories, or public
-ones that require approval before workflows run on fork PRs. A PR job can
-leave anything behind on a reused machine.
+Reused self-hosted runners are only safe where everyone who can trigger a
+workflow is trusted: a private repository, or a public one that requires
+approval before workflows run on fork PRs. A PR job can leave anything
+behind on a reused machine.
 
-## Before and after
+## 1. Before and after
 
-Ballparks for the same workflows at a few thousand jobs a day, with a warm
-pool during working hours (described below):
+Ballparks for the same workflows at a few thousand jobs a day:
 
 | | Blacksmith | Reused Boat runners |
 |---|---|---|
 | Runner cost per day (machine time) | A few tens of dollars | A few dollars: a small warm pool plus job time, which alone is roughly an order of magnitude cheaper |
-| Checkout plus install on a warm job | Several seconds to tens of seconds (disk mounts, mirror checkout, install reconcile) | A second or two each |
-| Same job on a fresh machine | About a minute or two of setup | Similar or worse (a fresh sandbox's snapshot hydrates lazily); avoid it |
-| Queue wait for a job | Seconds | Near zero on an idle runner; tens of seconds when a new runner has to start |
-| Heavy test lanes | Baseline | Comparable per core; the win is setup and price, not test bodies |
+| Checkout plus install on a warm job | Several seconds to tens of seconds | A second or two each |
+| Same job on a fresh machine | A minute or two of setup | Similar or worse, because the disk arrives lazily (section 3) |
+| Queue wait | Seconds | Near zero on an idle runner; tens of seconds when a new one has to start |
+| Heavy test lanes | Baseline | About the same per core |
 
-Costs here are machine time. Boat's plan fee comes back as sandbox time, so
-at these volumes it is part of the same spend, not overhead on top.
+Costs are machine time. Boat's plan fee comes back as sandbox time.
 
-Where the savings come from: per-second billing on cheap fast hardware, and
-runners that keep their workspace, git objects, `node_modules` and package
-store on local disk between jobs, so most of setup disappears. Where they
-don't: a job on a freshly started sandbox pays full setup and then some,
-which is why the design reuses runners and keeps a warm baseline.
+The savings come from two things: per-second billing on cheap, fast
+hardware, and runners that keep their workspace, git objects and
+`node_modules` between jobs, so most of setup disappears. A job on a freshly
+started machine gets neither, which is why the design below reuses runners.
 
-## Don't use a GitHub-hosted job to drive the sandbox
+## 2. Two ways to run CI on Boat
 
-The obvious recipe runs a small job on `ubuntu-latest` that creates a
-sandbox and runs the real work inside it. That pays for two machines per job:
-at thousands of jobs a day the GitHub-hosted minutes cost about what the
-sandboxes save. A "dispatcher" job per real job has the same problem. Register
-sandboxes as self-hosted runners instead, started by a webhook.
+**One sandbox per job.** Boat documents a CI recipe: install your toolchain
+once and save it as a named snapshot, then in your workflow create a sandbox
+from it, copy the code in, run the tests with `boat exec` (it returns their
+exit code), copy reports out, and delete the sandbox in a step that always
+runs. `boat run --from <snapshot> --push . -- <command>` does all of it in one
+line. Start here: it takes minutes to set up, and the sandbox can be much
+bigger than your usual runner.
 
-## Architecture
+It has two costs at scale. Every job still occupies a GitHub-hosted runner
+while it waits on the sandbox, so you pay for two machines. And every job
+starts a sandbox, which runs into Boat's start limits on a busy day.
 
-The shape of [philips-labs/terraform-aws-github-runner](https://github.com/philips-labs/terraform-aws-github-runner)'s
-reusable-runner mode, with Boat sandboxes in place of EC2.
-`scripts/boat-runners/` has a working implementation: one Lambda function,
-an SQS queue, a schedule and an OpenTofu stack.
+**Sandboxes as GitHub runners.** The whole job runs on the sandbox, started
+by a webhook. This is what the rest of this file covers, and what
+`scripts/boat-runners/` implements: one Lambda function, an SQS queue, a
+schedule and an OpenTofu stack, in the shape of
+[philips-labs/terraform-aws-github-runner](https://github.com/philips-labs/terraform-aws-github-runner)'s
+reusable-runner mode.
 
 ```
 GitHub App (workflow_job webhook)
@@ -63,171 +66,215 @@ schedule (every couple of minutes) ───────────┤
    replace old idle baseline runners, delete stale registrations
 ```
 
-- **Labels** map to sizes: `boat-2vcpu`, `boat-4vcpu`, `boat-8vcpu`,
-  `boat-16vcpu`. Workflows use `runs-on: boat-4vcpu`.
-- **A GitHub App** with Administration write (to mint runner registration
-  tokens and delete stale runners) and Actions read, subscribed to
-  `workflow_job`, installed on the one repository the controller serves (it
-  ignores jobs from others; run one controller per repository).
-- **The webhook** queues each `queued` job with a `boat-*` label on SQS with
-  a short delay, so an idle runner gets the first chance to claim it.
-- **The worker** reads each message. If the job is no longer queued, done.
-  If an idle runner with that label exists, the message goes back to the
-  queue and is checked again shortly; a burst of N queued jobs with no idle
-  runners starts N. Otherwise it creates a sandbox from the runner snapshot
-  whose setup script registers a reusable runner. Errors (start limits, no
-  capacity) also put the message back, and after enough tries it lands in a
-  dead-letter queue that alarms.
-- **Burst runners** stop themselves after a stretch without a job: long in
-  working hours (half an hour), short off hours (a few minutes). Created
-  with snapshots disabled, a stopped sandbox is erased, so nothing lingers or
-  bills.
-- **A baseline** of warm runners per label runs during working hours and
-  drains outside them, idle runners first and never a busy one. Keep it
-  small: one warm runner per busy size covers the start of the day, and
-  bursts that idle long in working hours keep warmth in step with traffic.
-  At per-second prices nearly all of the bill is idle time, so a large
-  always-on pool is the most expensive way to stay warm. Idle baseline runners older than a few hours are
-  replaced, which rolls out snapshot and boot-script changes on its own.
-- **Its own state.** Keep the controller's infrastructure apart from the
-  production stack, so a production outage or a production apply never
-  blocks CI capacity.
+- **Labels** map to sizes: `boat-2vcpu` to `boat-16vcpu`, plus a `-once`
+  form of each (section 5).
+- **A GitHub App** with Administration write (registration tokens, removing
+  stale runners) and Actions read, subscribed to `workflow_job`, installed on
+  the one repository the controller serves.
+- **The worker** checks each queued job. If an idle runner with its label
+  exists, it checks again shortly. If not, it starts a sandbox whose setup
+  script registers a runner, and keeps watching the job until it starts.
+  Errors put the message back; after enough tries it lands in a dead-letter
+  queue that alarms.
+- **Burst runners** stop themselves after a stretch without a job: half an
+  hour in working hours, a few minutes outside them. A sandbox created
+  without snapshots is erased when it stops.
+- **A small baseline** (one warm runner per busy size) covers the start of
+  the day and drains at night. Nearly all of the bill is idle time, so a big
+  always-on pool is the most expensive way to stay warm. Idle baseline
+  runners older than a few hours are replaced, which rolls out a new snapshot
+  on its own.
+- **Its own state.** Keep the controller apart from your production stack,
+  so a production outage or apply never blocks CI.
 
-Use the webhook, not polling. Polling the GitHub API for queued jobs costs
-too many requests once dozens of runs are in flight.
+## 3. Understand the lazy disk
 
-## Keep the workspace between jobs
+This is the one thing to understand about Boat before designing anything.
 
-A reused runner keeps its workspace. With `actions/checkout`'s default
-`clean: true`, checkout runs `git clean -ffdx` and deletes `node_modules`
-every job, and installs stay slow. Do this instead:
+A create from a named snapshot, a fork and a resume all land on a new host,
+and the disk is restored lazily. The sandbox is ready in seconds and every
+file is visible, but the content streams in behind it, and a file you read is
+fetched first. `hydrated` turns true on the sandbox once everything is local
+(`GET /sandboxes/{id}`, or the `sandbox.hydrated` webhook). Files from Boat's
+base image are already on every host; only your differences are restored.
+
+What it means for CI:
+
+- **A job started before `hydrated` runs slower.** Register the runner (or
+  start heavy work) after hydration, not on "ready". Waiting costs nothing
+  end to end, because the job then runs at full speed.
+- **Don't write a lot before `hydrated`.** A heavy writer during the restore
+  makes it take much longer.
+- **Keep the snapshot small.** Restore time follows the size of your changes
+  from the base image. A snapshot pre-filled with a big package cache made our
+  fresh sandboxes slower, not faster. Keep work directories out of snapshots
+  with `.boatignore` (gitignore syntax).
+- **Prefetching over the network doesn't help.** Once hydrated, reading your
+  hot files once warms the page cache in seconds, but reading ahead during
+  the restore just competes with it.
+- **Reused runners skip all of this.** A runner that stays up takes job after
+  job on a disk that is already local. That's the main reason to reuse them.
+- **A restore behaves like a reboot.** `/tmp` is empty and enabled systemd
+  units start again.
+
+## 4. Keep the workspace between jobs
+
+With `actions/checkout`'s default `clean: true`, checkout runs
+`git clean -ffdx` and deletes `node_modules` every job. Instead:
 
 - Check out with `clean: false`.
-- Install a job-started hook on the runner (`ACTIONS_RUNNER_HOOK_JOB_STARTED`)
-  that runs `git clean -ffdxq -e node_modules -e .turbo` in the workspace
-  (exclude whatever your build keeps warm), removes every docker container on
-  the machine, and clears the temp outputs your jobs write (the example
-  clears `$TMPDIR/ci-*`). This assumes the machine runs nothing but this
-  runner. Stale build output and leftover files can't mask a failure,
-  and the dependency tree stays warm.
+- Install a job-started hook (`ACTIONS_RUNNER_HOOK_JOB_STARTED`) that runs
+  `git clean -ffdxq -e node_modules -e .turbo` in the workspace (exclude
+  whatever your build keeps warm), removes every docker container on the
+  machine, and clears your jobs' temp outputs. This assumes the machine runs
+  nothing but this runner.
 - Keep the frozen install and the prune step on every job
   (`git-and-caching.md`): the tree rolls across lockfiles.
 
-With that, a warm job's checkout and install take a second or two each.
+A warm job's checkout and install then take a second or two each.
 
-## Reused runners carry state: privileged jobs get fresh machines
+## 5. Reused runners carry state: privileged jobs get fresh machines
 
 A reused runner keeps whatever earlier jobs left: `node_modules`, the tool
-cache, anything written with passwordless sudo under `/usr/local`. PR jobs
-run arbitrary code. A deploy job that later runs on the same machine runs
-whatever a PR job planted.
+cache, anything written with sudo. A deploy job that later runs on the same
+machine runs whatever a PR job planted.
 
-Give each size a `-once` label (`boat-4vcpu-once`): a fresh sandbox that
-registers an ephemeral runner (`config.sh --ephemeral`), runs one job and is
-erased. Put every job that holds credentials a PR can't otherwise reach on a
-`-once` label: deploys, migrations against production databases, image
-publishing, environment-protected jobs, and `pull_request_target` jobs that
-use a privileged token. Add a test that every job with an `environment:`
-runs on a `-once` label.
+Give each size a `-once` label: a fresh sandbox that registers an ephemeral
+runner (`config.sh --ephemeral`), runs one job and is erased. Put every job
+that holds credentials a PR can't otherwise reach on it: deploys, production
+migrations, image publishing, environment-protected jobs, and
+`pull_request_target` jobs with a privileged token. Add a test that every job
+with an `environment:` uses a `-once` label.
 
-PR-triggered jobs that read ordinary repository secrets gain little from
-isolation, because a PR can already read those by editing a workflow. The
-boundary that matters is environment-scoped and deploy-only credentials.
+PR jobs that read ordinary repository secrets gain little from this, since a
+PR can read those by editing a workflow. `-once` jobs pay the cold start
+every time; deploys are rare enough that this is fine.
 
-`-once` jobs pay the cold start every time. Deploys are rare enough that
-this is fine.
+## 6. Mistakes to avoid
 
-## The runner snapshot
+### Differences from GitHub-hosted runners
 
-Build a named snapshot with the Actions runner unpacked at
-`~/actions-runner`, its dependencies installed, and the tools your jobs would
-otherwise install per run (a database client, a cloud CLI). Keep it lean: a
-large snapshot pre-filled with a package cache made fresh sandboxes slower,
-because a named snapshot reaches a new machine lazily. Let each reused runner
-warm its own cache on local disk. Saving under the same name replaces the
-snapshot, and the baseline's age-based replacement picks it up.
+- **Locale.** Boat uses `en_US.UTF-8`, GitHub `C.UTF-8`, and `sort` orders
+  differently between them. Set `LC_ALL=C.UTF-8` in your jobs.
+- **git.** Install a recent git in the snapshot; Ubuntu's can break sparse
+  partial clones.
+- **apt.** GitHub's image answers yes by itself. Set
+  `DEBIAN_FRONTEND=noninteractive` and an assume-yes apt config.
+- **Tools.** The base image has fewer preinstalled toolchains (no `psql`, no
+  AWS CLI, no .NET). Put what every job needs in the snapshot.
+- **Writable tool paths.** Actions that install into `/usr/share/...`
+  (`setup-dotnet`) need a directory the runner user can write.
+- **Memory overcommit.** Linters with mmap-based allocator pools (oxlint)
+  reserve more virtual memory than the small sizes allow by default. Set
+  `vm.overcommit_memory=1` at boot.
+- **CPU count.** If you limit a job to some CPUs, Node's `os.cpus()` and
+  Python's `os.cpu_count()` still see the whole machine. Set worker counts
+  explicitly.
+- **systemd units don't read `/etc/environment`.** A runner started as a unit
+  needs its full `PATH`.
+- **Docker images in snapshots.** A named snapshot keeps only images that a
+  container uses.
+- **x64 Linux only.** macOS and arm64 jobs stay elsewhere.
 
-`scripts/boat-runners/build-runner-snapshot.sh` builds one.
+### State between jobs on one machine
 
-## Start limits shape the design
+- **Sparse checkouts stay sparse.** A job that sparse-checks-out the shared
+  workspace hides files from the next job. Check sparse jobs out into their
+  own directory, or reset it in the job-started hook.
+- **`pip install` changes the shared interpreter.** Use a virtualenv per job.
+- **Reporters append to `/tmp`.** Clear job outputs in the hook, or write
+  under the workspace.
+- **Keep the same paths for every job.** Caches keyed on paths, and compiler
+  caches holding absolute paths, miss when the checkout moves.
+- **One job per machine.** If you ever run several, give each its own `HOME`;
+  two package installs into one shared cache can corrupt it.
 
-Boat limits sandbox creation per minute, per hour and per day by plan
-(`GET /api/v1/limits`). One sandbox per job is impossible at thousands of
-jobs a day, most of them short. Reused runners start sandboxes per burst,
-not per job, which keeps starts well inside the limits. Cap concurrent
-starts in the worker so a burst can't exceed the per-minute limit.
+### Caches and network
 
-## Gotchas
+- **Boat runs in Europe; GitHub's cache service is in the US.** `actions/cache`
+  is slow from Boat machines. Keep caches on the runner's disk (which reuse
+  gives you), or in an object store near Boat.
+- **A single connection gets much less than the machine's bandwidth.**
+  Download big files with parallel ranges.
+- **`tar` of a directory that is still hydrating fails** ("file changed as we
+  read it"), and `actions/cache` reports a failed save. Another reason to
+  wait for `hydrated`.
 
-- **Just-in-time runner configs carry only the labels you pass.** Add
-  `self-hosted` explicitly, or jobs that ask for `[self-hosted, boat-4vcpu]`
-  never match and the runner sits idle. `config.sh` adds `self-hosted`,
-  `Linux` and `X64` by itself unless told not to.
+### Runner supervision
+
 - **Keep the registration token away from jobs.** Boat puts the sandbox's
-  `env` into the setup process's environment, and everything it starts
-  inherits it. A registration token there lets a job register its own
-  runner with any label, including a `-once` one. Register, then `exec` the
-  runner loop under `env -u` so no long-lived process ever had the token.
-- **A runner can be taken by a different job.** A runner started for one
-  queued job goes to whichever job with that label GitHub assigns. Keep
-  watching the job that triggered the start, and start another runner if
-  it is still queued after a boot grace period.
-- **`boat new --json` streams one JSON line per state change.** Take the
-  sandbox id from the `ready` event.
-- **The setup script runs in the background as the sandbox user after the
-  sandbox is ready.** A good place to configure and start the runner.
-- **A sandbox can stop itself** with the in-sandbox CLI and its own id; it
-  can't delete itself. Created with snapshots disabled, stopping is enough.
+  `env` into the setup process, and everything it starts inherits it. With
+  the token, a job can register its own runner with a `-once` label and take
+  deploy jobs. Register, then `exec` the runner loop under `env -u`.
+- **A runner can be taken by a different job.** Keep watching the job that
+  triggered a start, and start another runner if it is still queued after a
+  boot grace period.
+- **GitHub may drop a webhook,** and never redelivers one that got an error.
+  Also list queued runs on the schedule and treat each as if its webhook had
+  arrived. One list call every couple of minutes is cheap; polling every job
+  instead of using webhooks is not.
+- **A runner that dies must be replaced and deregistered,** or its job waits
+  forever. When a runner's machine disappears, GitHub fails the job only
+  after several minutes ("lost communication with the server"). Detect it
+  yourself and re-run the job, but never re-run a real test failure.
+- **Stop idle machines yourself, and keep a safety net.** Boat's auto-stop
+  counts from create or resume, not from the last job. Stop idle runners from
+  inside, and on every schedule tick refresh `ttlSeconds` on each live
+  runner (`PATCH /sandboxes/{id}`), so machines still stop if the controller
+  dies.
+- **The idle watchdog must treat a running job as busy,** and match only its
+  own runner's worker process (its full install path): a pattern like
+  `pgrep -f Runner.Worker` also matches a CI job's runner on the same machine.
+- **Clean up registrations carefully.** A booting runner isn't registered
+  yet; remove only offline registrations whose sandbox is gone. Deregister a
+  baseline runner before stopping it, since GitHub refuses to remove a runner
+  that just took a job.
 - **Stop the runner listener with TERM.** Background processes in a
   non-interactive shell ignore SIGINT.
-- **The idle watchdog must treat a running job as busy** and recheck after
-  its loop, or a job that starts at the end of the idle window gets killed
-  mid-run.
-- **Match only your own runner's worker process.** A pattern like
-  `pgrep -f Runner.Worker` also matches the worker of a CI job running on the
-  same machine (your controller's own tests, if CI runs on these runners).
-  Match the runner's full install path.
-- **Count idle time in whole seconds and poll every couple of seconds.**
-  Tests of the watchdog need bounds that allow for both.
-- **Clean up registrations carefully.** A booting runner isn't registered
-  yet; delete only offline registrations whose sandbox is gone. Deregister a
-  baseline runner before stopping its sandbox, since GitHub refuses to delete
-  a runner that just took a job.
-- **Memory overcommit.** Linters with mmap-based allocator pools (oxlint)
-  reserve more virtual memory than RAM plus swap on small sizes, and the
-  default heuristic refuses. Set `vm.overcommit_memory=1` at boot.
-- **The base image differs from managed runner images** (a newer Ubuntu, no
-  preinstalled language toolchains beyond the basics). Expect a few missing
-  tools on the first runs.
-- **x64 Linux only.** macOS and arm64 jobs stay on another provider.
-- **Keep a heartbeat job on runners you don't operate**, so it can still
-  report when your runners are down. A guard job that checks the integrity
-  of other CI jobs belongs on a machine those jobs can't touch.
-- **GitHub App setup in a browser**: the manifest flow asks for sudo-mode
-  re-authentication, and the private key download can be blocked by the
-  browser's multiple-download guard. Write each secret to its store and
-  confirm the write before deleting the local copy.
+- **Just-in-time runner configs carry only the labels you pass.** Add
+  `self-hosted` yourself. `config.sh` adds it by default.
+- **Keep a heartbeat job on runners you don't operate,** so it can report
+  when yours are down.
 
-## Moving workflows over
+### Limits
 
-Start with a pilot workflow that runs the same small job on both providers
-and compare a few dozen runs, fresh and warm. Then move labels in one change
-and fix what the first runs surface. Typical fixes:
+- **Starts are counted per account:** create, fork and resume each count,
+  with per-minute, per-hour and per-day budgets by plan (`GET /limits`). One
+  sandbox per job uses them up on a busy day; reused runners start per
+  burst. Cap concurrent starts in the worker.
+- **Hosts vary.** The same build can be slower on one host than another, and
+  you can't pick. Compare medians of several runs.
+
+## 7. The runner snapshot
+
+Build it from a fresh `boat new`: the Actions runner at `~/actions-runner`
+with its dependencies, a recent git, and the tools every job would otherwise
+install. Keep it lean (section 3). Rebuild from a fresh box rather than one
+that has lived through many resumes. Saving under the same name replaces the
+snapshot, and the baseline's age-based replacement rolls it out.
+`scripts/boat-runners/build-runner-snapshot.sh` builds one.
+
+## 8. Moving workflows over
+
+Run the same small job on both providers in a pilot workflow, and compare a
+few dozen runs, fresh and warm. Then move the labels in one change and fix
+what the first runs surface:
 
 | Symptom | Fix |
 |---|---|
 | Installs slow every job | `clean: false` on checkout plus the job-started hook |
-| `setup-dotnet` (or similar) can't write to `/usr/share/...` | Install into the runner's tool cache directory |
-| A sparse checkout hides files from the next job on that runner | Check sparse jobs out into their own subdirectory |
-| A `pip install` changes a later job's Python | A virtualenv per job; never install into the shared tool-cache interpreter |
-| Database readiness probes missing (`pg_isready`) | Probe the port over TCP, or add the client to the snapshot |
-| Test reporters append to files in `/tmp` and a later job reads the stale lines | Clear job outputs in the hook, or write under the workspace |
+| An action can't write to `/usr/share/...` | Install into the runner's tool cache directory |
+| Files missing after another job's sparse checkout | Sparse jobs check out into their own directory |
+| A later job's Python has extra packages | A virtualenv per job |
+| `pg_isready` missing | Probe the port over TCP, or add the client to the snapshot |
+| Tests read stale lines from `/tmp` | Clear job outputs in the hook |
 | Service containers left running | Remove containers in the hook |
 | Image builds need buildx | Add the setup step explicitly |
 | A large dependency cache restore step | Delete it; the runner already has the tree |
-| A dev server killed with exit 137 | A bigger size |
+| A process killed with exit 137 | A bigger size |
+| A test's sort order differs | `LC_ALL=C.UTF-8` |
 
 Then lock it in with tests over the workflow files: every PR job uses a
-`boat-*` label, every checkout uses `clean: false`, no steps from the
-previous provider remain, every `environment:` job uses `-once`, sparse
-checkouts use their own directory, and `pip install` runs in a virtualenv.
+`boat-*` label, every checkout uses `clean: false`, no steps from the old
+provider remain, every `environment:` job uses `-once`, sparse checkouts use
+their own directory, and `pip install` runs in a virtualenv.
