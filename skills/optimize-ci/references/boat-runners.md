@@ -75,13 +75,16 @@ schedule (every couple of minutes) ───────────┤
   whose setup script registers a reusable runner. Errors (start limits, no
   capacity) also put the message back, and after enough tries it lands in a
   dead-letter queue that alarms.
-- **Burst runners** stop themselves after a stretch without a job. Created
+- **Burst runners** stop themselves after a stretch without a job: long in
+  working hours (half an hour), short off hours (a few minutes). Created
   with snapshots disabled, a stopped sandbox is erased, so nothing lingers or
   bills.
 - **A baseline** of warm runners per label runs during working hours and
-  drains outside them, idle runners first and never a busy one. Size it
-  below measured p95 concurrency per label; bursts cover peaks and stay warm
-  for their idle window. Idle baseline runners older than a few hours are
+  drains outside them, idle runners first and never a busy one. Keep it
+  small: one warm runner per busy size covers the start of the day, and
+  bursts that idle long in working hours keep warmth in step with traffic.
+  At per-second prices nearly all of the bill is idle time, so a large
+  always-on pool is the most expensive way to stay warm. Idle baseline runners older than a few hours are
   replaced, which rolls out snapshot and boot-script changes on its own.
 - **Its own state.** Keep the controller's infrastructure apart from the
   production stack, so a production outage or a production apply never

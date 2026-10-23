@@ -60,9 +60,14 @@ variable "baseline_hours_utc" {
   default     = ""
 }
 variable "idle_seconds" {
-  description = "A burst runner stops after this long without a job"
+  description = "A burst runner started inside baseline_hours_utc stops after this long without a job"
   type        = number
-  default     = 900
+  default     = 1800
+}
+variable "idle_seconds_off_hours" {
+  description = "A burst runner started outside baseline_hours_utc stops after this long without a job"
+  type        = number
+  default     = 300
 }
 variable "baseline_max_age_hours" {
   description = "Idle baseline runners older than this are replaced, which rolls out a new snapshot"
@@ -143,16 +148,17 @@ resource "aws_lambda_function" "this" {
   memory_size      = 256
   environment {
     variables = {
-      REPOSITORY         = var.repository
-      APP_ID             = var.app_id
-      INSTALLATION_ID    = var.installation_id
-      SNAPSHOT           = var.snapshot
-      BASELINE           = jsonencode(var.baseline)
-      IDLE_SECONDS       = tostring(var.idle_seconds)
-      MAX_AGE_HOURS      = tostring(var.baseline_max_age_hours)
-      BASELINE_HOURS_UTC = var.baseline_hours_utc
-      QUEUE_URL          = aws_sqs_queue.jobs.url
-      SECRET_ARN         = aws_secretsmanager_secret.this.arn
+      REPOSITORY             = var.repository
+      APP_ID                 = var.app_id
+      INSTALLATION_ID        = var.installation_id
+      SNAPSHOT               = var.snapshot
+      BASELINE               = jsonencode(var.baseline)
+      IDLE_SECONDS           = tostring(var.idle_seconds)
+      IDLE_SECONDS_OFF_HOURS = tostring(var.idle_seconds_off_hours)
+      MAX_AGE_HOURS          = tostring(var.baseline_max_age_hours)
+      BASELINE_HOURS_UTC     = var.baseline_hours_utc
+      QUEUE_URL              = aws_sqs_queue.jobs.url
+      SECRET_ARN             = aws_secretsmanager_secret.this.arn
     }
   }
   depends_on = [aws_cloudwatch_log_group.lambda]

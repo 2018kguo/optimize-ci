@@ -15,6 +15,7 @@ import { test } from "node:test";
 import {
   baselineToRetire,
   boatLabel,
+  burstIdleSeconds,
   idleRunners,
   inHourWindow,
   nextStep,
@@ -29,6 +30,7 @@ test("only boat-* labels are claimed", () => {
   assert.equal(boatLabel(["self-hosted", "boat-8vcpu"]), "boat-8vcpu");
   assert.equal(boatLabel(["boat-4vcpu-once"]), "boat-4vcpu-once");
   assert.equal(boatLabel(["ubuntu-latest"]), null);
+  assert.equal(boatLabel(["self-hosted", "linux"]), null);
 });
 
 test("webhook signatures are checked against the raw body", () => {
@@ -352,4 +354,15 @@ test("a queued job is watched until it leaves the queue, restarting a runner ano
     step({ queued: true, idle: 0, startedAt: now - 300_000, starts: 3 }),
     "recheck"
   );
+});
+
+test("burst runners stay warm longer in working hours", () => {
+  const env = {
+    BASELINE_HOURS_UTC: "22-6",
+    IDLE_SECONDS: "1800",
+    IDLE_SECONDS_OFF_HOURS: "300",
+  };
+  const at = (h) => new Date(Date.UTC(2026, 9, 23, h));
+  assert.equal(burstIdleSeconds(env, at(23)), 1800);
+  assert.equal(burstIdleSeconds(env, at(12)), 300);
 });

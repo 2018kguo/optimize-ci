@@ -96,6 +96,15 @@ export function inHourWindow(window, now = new Date()) {
     : hour >= start || hour < end;
 }
 
+// How long a burst runner waits for its next job. In working hours a runner
+// that has seen work stays warm through gaps between pushes, which is cheaper
+// than an always-on pool; off hours it stops soon after its last job.
+export function burstIdleSeconds(env, now = new Date()) {
+  return inHourWindow(env.BASELINE_HOURS_UTC, now)
+    ? Number(env.IDLE_SECONDS ?? 1800)
+    : Number(env.IDLE_SECONDS_OFF_HOURS ?? 300);
+}
+
 // Baseline sandboxes to stop: idle ones past their age (rolls out snapshot
 // and boot-script changes) and idle ones beyond the current target (the
 // baseline drains outside its hour window). A busy runner is never chosen.
@@ -268,7 +277,7 @@ async function startRunner(label, kind) {
     `/repos/${repo}/actions/runners/registration-token`,
     { method: "POST" }
   );
-  const idle = kind === "base" ? 0 : Number(process.env.IDLE_SECONDS ?? 600);
+  const idle = kind === "base" ? 0 : burstIdleSeconds(process.env);
   const body = await boat("/sandboxes", {
     method: "POST",
     body: JSON.stringify({

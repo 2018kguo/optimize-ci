@@ -66,7 +66,8 @@ so run nothing else on these sandboxes.
 |---|---|
 | `baseline` | Warm reused runners per label while the window is open |
 | `baseline_hours_utc` | UTC hours the baseline stays up, such as `8-20` or `22-6` (wraps midnight); empty means always |
-| `idle_seconds` | A burst runner stops after this long without a job |
+| `idle_seconds` | A burst runner started inside the window stops after this long without a job |
+| `idle_seconds_off_hours` | The same, for bursts started outside the window |
 | `baseline_max_age_hours` | Idle baseline runners older than this are replaced, which rolls out a new snapshot |
 | `max_concurrent_starts` | Concurrent queue workers, which bounds concurrent sandbox starts under Boat's per-minute start limit |
 | `snapshot` | Named snapshot runners start from |
