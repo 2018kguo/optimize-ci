@@ -7,7 +7,8 @@ CI is on a lot of engineers' minds right now. Agents open far more PRs than
 people did, and every one of them runs the pipeline. Ours got slow and
 expensive, so we went after it. The skill starts with the table stakes
 (only running jobs whose inputs changed, cancelling superseded PR runs,
-caching, sharding by measured test time, timeouts), then what made the real
+caching, sharding by measured test time, static checks first, pre-commit and
+pre-push hooks, timeouts), then what made the real
 difference:
 
 - **Running only what the diff can affect.** Walk the import graph from the

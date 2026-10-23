@@ -39,6 +39,10 @@ miss. Check each one before the bigger work below.
   together. Refresh the timings from recent green runs (`references/runners.md`).
 - **Run independent jobs in parallel,** with the cheap static checks (format,
   lint, typecheck) failing fast instead of waiting behind the slow suites.
+- **Catch cheap failures before they reach CI.** A pre-commit hook that formats
+  and lints staged files, and a short pre-push check (format, lint, typecheck
+  of changed files). With agents pushing all day, a lot of red CI is exactly
+  these (`references/guardrails.md`).
 - **Set a timeout on every job,** so a hung test costs minutes, not the
   provider's six-hour default.
 - **Keep light jobs on small runners,** and size heavy ones from their CPU
