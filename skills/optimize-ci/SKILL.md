@@ -18,6 +18,11 @@ backend tests, and GitHub Actions. Runners were Blacksmith and are now
 [Boat](https://docs.boat.dev) sandboxes, started by a small autoscaler on AWS
 Lambda.
 
+Not all of it will fit your repo. A small repo that runs its whole suite in
+a few minutes doesn't need per-test selection; a team on GitHub-hosted
+runners may not want to run an autoscaler. Measure first, then pick the
+steps whose problem actually shows up in the numbers.
+
 Two words used throughout: a **lane** is one suite a workflow can run or
 skip (backend tests, web tests, end-to-end), and a **decision model** is a
 fast classifier that answers a batch of yes/no questions with a probability
@@ -87,8 +92,9 @@ defaults agents still reach for).
 
 **We moved from Blacksmith to Boat.** Boat's machines cost roughly a tenth
 as much per minute, and because our runners stay up between jobs, a warm job
-spends a second or two on setup instead of tens of seconds
-(`references/boat-runners.md`, with the autoscaler in
+spends a second or two on setup instead of tens of seconds. Most of what's
+left on the bill is machines waiting for work, so the warm pool follows
+working hours (`references/boat-runners.md`, with the autoscaler in
 `scripts/boat-runners/`). Runner sizing and sharding are in
 `references/runners.md`.
 

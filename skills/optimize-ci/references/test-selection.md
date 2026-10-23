@@ -110,8 +110,8 @@ was bound by per-file boot, not test bodies.
 Record a set of real historical revisions where a test caught a real bug:
 the commit, the diff, the failing tests, the original run. A test replays the
 selector against them and fails CI if recall drops below a floor, if named
-must-catch revisions stop being caught, or if the decision model stops selecting
-fewer files than the graph alone. Changing the prompt or the graph code
+must-catch revisions stop being caught, or if the decision model stops
+selecting fewer files than the graph alone. Changing the prompt or the graph code
 forces re-recording, so the floor is always measured against the current
 selector.
 
@@ -189,5 +189,5 @@ is fixed.
   cancellation on main made the main quiet period pointless too.
 - A merge queue multiplies the cost of your slowest suite: every batch pays
   it, batches run serially, and a flaky suite makes the queue bisect and
-  invalidate itself. If the problem is deploy fan-out on every merge, fix it on the deploy side by
-  coalescing deploys to the tip of main.
+  invalidate itself. If the problem is deploy fan-out on every merge, fix it
+  on the deploy side by coalescing deploys to the tip of main.

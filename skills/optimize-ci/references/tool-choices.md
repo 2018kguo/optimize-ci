@@ -145,9 +145,8 @@ Add retries around its installer on hosts that fetch it.
 
 ## Runners
 
-Managed runner providers beat GitHub-hosted
-runners on speed and price, and persistent disks and checkout mirrors make
-them better still. Reused sandbox runners beat both on cost, and on setup
+Managed runner providers beat GitHub-hosted runners on speed and price, and
+persistent disks and checkout mirrors make them better still. Reused sandbox runners beat both on cost, and on setup
 time once warm. See `runners.md` and `boat-runners.md`.
 
 ARM runners are usually cheaper per minute; whether they are cheaper per job

@@ -213,6 +213,12 @@ every time; deploys are rare enough that this is fine.
 - **Boat runs in Europe; GitHub's cache service is in the US.** `actions/cache`
   is slow from Boat machines. Keep caches on the runner's disk (which reuse
   gives you), or in an object store near Boat.
+- **Skip cache steps the runner doesn't need.** A step that restores a task
+  runner's cache (Turbo's, say) from the cache service and uploads it again
+  costs tens of seconds per job from Boat, while a reused runner already
+  has that cache on disk. Run the restore and the upload only when the local
+  cache directory is empty, and give both the same condition so one never
+  runs without the other.
 - **A single connection gets much less than the machine's bandwidth.**
   Download big files with parallel ranges.
 - **`tar` of a directory that is still hydrating fails** ("file changed as we
@@ -241,10 +247,11 @@ every time; deploys are rare enough that this is fine.
   after several minutes ("lost communication with the server"). Detect it
   yourself and re-run the job, but never re-run a real test failure.
 - **Stop idle machines yourself, and keep a safety net.** Boat's auto-stop
-  counts from create or resume, not from the last job. Stop idle runners from
-  inside, and on every schedule tick refresh `ttlSeconds` on each live
-  runner (`PATCH /sandboxes/{id}`), so machines still stop if the controller
-  dies.
+  counts from create or resume, not from the last job, so a fixed TTL on a
+  long-lived runner eventually stops it in the middle of a job. Stop idle
+  runners from inside, and on every schedule tick set `ttlSeconds` on each
+  live runner to its age plus a margin (`PATCH /sandboxes/{id}`), so
+  machines still stop within that margin if the controller dies.
 - **The idle watchdog must treat a running job as busy,** and match only its
   own runner's worker process (its full install path): a pattern like
   `pgrep -f Runner.Worker` also matches a CI job's runner on the same machine.
@@ -301,3 +308,28 @@ Then lock it in with tests over the workflow files: every PR job uses a
 `boat-*` label, every checkout uses `clean: false`, no steps from the old
 provider remain, every `environment:` job uses `-once`, sparse checkouts use
 their own directory, and `pip install` runs in a virtualenv.
+
+## 9. What it costs
+
+Nearly all of the bill is machines waiting, not machines working. Three
+parts add up to the daily cost:
+
+- **Job time:** the sum of job durations per size, times that size's hourly
+  price. This is the part that ends up roughly an order of magnitude below
+  a managed provider.
+- **The warm pool:** baseline runners per size, times the hours the window
+  is open, times the price.
+- **Idle tails:** every burst runner bills for its idle window after its
+  last job, so the number of bursts times the window.
+
+For us, job time and the pool each came to a couple of dollars a day, and
+the tails to under a dollar. If the total creeps up, it's almost always the
+second or third part: shrink the baseline to below the measured p95 of
+concurrent jobs per size, keep it to working hours, and shorten the burst
+idle window outside them.
+
+To check it, list the live sandboxes (`GET /sandboxes`). Each one carries
+its size, its creation time and `billingMultiplier`, its price relative to
+the default size. Summing running time times price over a day, and taking
+job durations from `gh run view --json jobs`, splits the bill into those
+three parts.

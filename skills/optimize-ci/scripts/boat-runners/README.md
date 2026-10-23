@@ -80,6 +80,21 @@ and the sandbox listing (first 200 live sandboxes) are constants in
 Size the baseline from measured concurrency: count, per label, how many jobs
 ran at once over a busy day, and set the baseline below the p95.
 
+## After you deploy
+
+Check these once, a few minutes after the first apply:
+
+- A new runner shows up in `gh api repos/<owner>/<repo>/actions/runners`
+  within about half a minute of its `runner.started` line. It waits for its
+  disk to be `hydrated` before registering, so a gap of that size is normal.
+- Every live runner sandbox has `ttlSeconds` close to its age plus half an
+  hour (`GET /sandboxes`), and the number grows with each schedule tick.
+- A job you queue while no runner of its size is idle starts within a
+  minute; one queued while a runner is idle starts within seconds.
+- Outside the baseline window the pool drains, and burst runners stop a few
+  minutes after their last job.
+- The dead-letter queue is empty.
+
 ## When jobs sit queued
 
 - `aws logs tail /aws/lambda/ci-runners --since 15m`: one `runner.started`
@@ -89,4 +104,8 @@ ran at once over a busy day, and set the baseline below the p95.
 - A runner online but never taking jobs: the job asks for a label the runner
   doesn't have.
 - Boat's start limits: `curl -s https://boat.dev/api/v1/limits -H "Authorization: Bearer $KEY"`.
-- The App's recent webhook deliveries: App settings, Advanced.
+- The App's recent webhook deliveries: App settings, Advanced. A dropped
+  delivery is picked up by the schedule within a few minutes
+  (`job.requeued_missed` in the log).
+- A sandbox that keeps billing with no runner registered is stopped by the
+  schedule ten minutes after it was created (`runner.orphan_stopped`).

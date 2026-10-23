@@ -70,10 +70,10 @@ than its largest file; split giant files.
 After selection, most of a short run is setup. Run independent setup in
 parallel:
 
-- GitHub Actions runners from 2.337 support background steps
-  (`background: true` on a step, then `wait: [...]`; check the runner
-  release notes for your version) (not inside composite
-  actions; a wait on a step skipped by `if` is fine). Databases, service
+- Recent GitHub Actions runners support background steps: `background: true`
+  on a step, then `wait: [...]` on the step that needs it. Check the runner
+  release notes for your version. They don't work inside composite actions,
+  and waiting on a step that `if` skipped is fine. Databases, service
   containers, builds and cache restores can all start together.
 - Where that isn't available, start the work with `nohup ... &`, write its
   exit code to a file, and join in a later step.
