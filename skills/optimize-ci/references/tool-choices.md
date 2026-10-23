@@ -6,8 +6,8 @@ an order of magnitude faster than the tools most tutorials, templates and
 agents still default to. Swapping them was some of the cheapest CI time
 recovered, but each swap needs a parity check on your own tree.
 
-Re-evaluate this list every few weeks. Several entries below moved twice in
-a few months.
+Check this list again before relying on it. These tools change quickly, and
+several entries below have already changed more than once.
 
 ## Lint: oxlint
 

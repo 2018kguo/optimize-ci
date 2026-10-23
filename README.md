@@ -5,14 +5,21 @@ faster, written up as a skill an agent can follow on your repo.
 
 CI is on a lot of engineers' minds right now. Agents open far more PRs than
 people did, and every one of them runs the pipeline. Ours got slow and
-expensive, so we spent a few months on it. What made the difference:
+expensive, so we went after it. What made the difference:
 
 - **Running only what the diff can affect.** Walk the import graph from the
   diff, then have a cheap model keep the tests that actually run the changed
   code. A replay of real past failures checks recall, and the full suite
   still runs every few hours.
-- **Cutting test CPU.** TS loaders and a process per test file cost more than
-  the tests themselves.
+- **Profiling the tests and cutting what didn't earn its keep.** We profiled
+  the exact commands CI runs and fixed whatever sat on top: TS loaders and a
+  process per test file cost more than the tests themselves. Then we deleted
+  tests that re-checked what another test already covered, replaced real
+  sleeps with fake clocks, and fixed slow helpers instead of shrinking
+  fixtures.
+- **Counting what each suite actually caught.** Most of the red on PRs from
+  the heavy suites was flakes and infrastructure, which is what made it safe
+  to stop running them on every PR.
 - **Newer tools.** oxlint, oxfmt, oxc-based loaders and native typecheckers
   instead of ESLint, Prettier, tsx and `tsc --noEmit`.
 - **Git and caches.** HTTP/1.1 for git fixed checkouts that sometimes took
@@ -53,8 +60,8 @@ The references:
 
 - `measure.md`: per-job CPU and memory sampling, timing reports, reading
   noisy numbers
-- `test-cpu.md`: profiling what CI actually runs, and where TypeScript test
-  suites spend their CPU
+- `test-cpu.md`: profiling what CI actually runs, where TypeScript test
+  suites spend their CPU, deleting duplicate and low-value tests, flakes
 - `test-selection.md`: lane selection, picking tests with an import graph and
   a model, the replay check, scheduled full runs, never cancelling main,
   red-main alerts

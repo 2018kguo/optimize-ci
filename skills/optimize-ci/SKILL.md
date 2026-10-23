@@ -25,8 +25,13 @@ by the second; we register them as GitHub Actions runners.
 
 1. **Measuring first.** Most of our guesses about where the time went were
    wrong. See `references/measure.md`.
-2. **Cutting test CPU.** TS loaders and starting a process per test file cost
-   more than the tests did. See `references/test-cpu.md`.
+2. **Profiling tests and deleting the low-value ones.** We profiled the
+   exact commands CI runs. TS loaders and starting a process per test file
+   cost more than the tests did. Then we deleted tests that re-checked what
+   another test covered, swapped real sleeps for fake clocks, and fixed slow
+   helpers. Counting what each suite actually caught on PRs showed most of
+   the heavy suites' red was flakes. See `references/test-cpu.md` and
+   `references/measure.md`.
 3. **Running only what the diff can affect.** We walk the import graph from
    the diff, then a cheap model keeps the tests that actually run the changed
    code. A replay of real past failures checks that we still catch them, and
