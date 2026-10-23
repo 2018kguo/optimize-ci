@@ -24,10 +24,29 @@ Ballparks for the same workflows at a few thousand jobs a day:
 
 Costs are machine time. Boat's plan fee comes back as sandbox time.
 
-The savings come from two things: per-second billing on cheap, fast
-hardware, and runners that keep their workspace, git objects and
-`node_modules` between jobs, so most of setup disappears. A job on a freshly
-started machine gets neither, which is why the design below reuses runners.
+### Why not run CI on any machine?
+
+You can, and that's most of the point. Nothing here depends on a shared
+drive. Three things made Boat worth it for us.
+
+The first is price. Per vCPU-minute, Boat's machines cost roughly an order of
+magnitude less than Blacksmith's, billed per second with no rounding up to
+the minute.
+
+The second is that the runner keeps its own disk. A managed provider starts a
+fresh VM for every job and mounts a cached copy of your dependencies, which
+is fast, but every job still pays to check out, mount and reconcile. Our
+runners stay up and take job after job on the same local disk, so a warm job
+finds the repo, `node_modules` and build caches already there.
+
+The third is that machines come from an API in seconds, from a snapshot. The
+autoscaler is one small Lambda function, and there is no fleet to patch or
+keep warm overnight. If you already run your own always-on boxes, you get
+most of the first two there; the trade is that you manage capacity and pay
+for idle machines. Boat is the same idea with machines you rent by the second.
+
+A job on a freshly started sandbox gets none of the second benefit, which is
+why the design below reuses runners.
 
 ## 2. Two ways to run CI on Boat
 
@@ -213,6 +232,10 @@ every time; deploys are rare enough that this is fine.
   Also list queued runs on the schedule and treat each as if its webhook had
   arrived. One list call every couple of minutes is cheap; polling every job
   instead of using webhooks is not.
+- **A sandbox can lose its runner.** We had a runner machine restored onto a
+  new host, which drops running processes and doesn't rerun the setup script:
+  the machine kept billing with no runner on it. Stop any runner sandbox that
+  has no registered runner a few minutes after it was created.
 - **A runner that dies must be replaced and deregistered,** or its job waits
   forever. When a runner's machine disappears, GitHub fails the job only
   after several minutes ("lost communication with the server"). Detect it

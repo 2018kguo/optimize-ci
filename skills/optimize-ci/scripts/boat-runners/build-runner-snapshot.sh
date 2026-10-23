@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds the named Boat snapshot the controller starts runners from: the
 # GitHub Actions runner unpacked at ~/actions-runner with its dependencies,
-# plus a Postgres client and AWS CLI v2 (the base image already has gh, jq,
-# docker, node and git). Add the tools your jobs would otherwise install on
+# plus a recent git, a Postgres client and AWS CLI v2 (the base image already
+# has gh, jq, docker and node). Add the tools your jobs would otherwise install on
 # every run, and nothing else: a large snapshot reaches a new machine lazily,
 # so pre-filled package caches make fresh sandboxes slower, not faster.
 # Reused runners warm their own caches on local disk.
@@ -28,10 +28,12 @@ boat exec "$id" --timeout 600 -- bash -lc "
   curl -fsSL https://github.com/actions/runner/releases/download/v$version/actions-runner-linux-x64-$version.tar.gz | tar xz
   sudo ./bin/installdependencies.sh >/dev/null 2>&1
   ./config.sh --version
-  sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client >/dev/null
+  # A recent git: Ubuntu's can break sparse partial clones.
+  sudo DEBIAN_FRONTEND=noninteractive add-apt-repository -y ppa:git-core/ppa >/dev/null
+  sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git postgresql-client >/dev/null
   curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscli.zip
   (cd /tmp && unzip -q awscli.zip && sudo ./aws/install --update >/dev/null && rm -rf aws awscli.zip)
-  psql --version && aws --version
+  git --version && psql --version && aws --version
 " | jq -r '.stdout // empty'
 
 boat stop "$id" >/dev/null

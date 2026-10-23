@@ -18,6 +18,9 @@ import {
   burstIdleSeconds,
   idleRunners,
   inHourWindow,
+  missedJobs,
+  orphanSandboxes,
+  safetyTtl,
   nextStep,
   parseSandboxName,
   runnerScript,
@@ -151,7 +154,7 @@ while true; do sleep 0.2; done
   );
   writeFileSync(
     path.join(home, ".ascii", "boat"),
-    '#!/usr/bin/env bash\necho "stop $2" >> ~/events\n',
+    '#!/usr/bin/env bash\ncase "$1" in info) echo \'{"sandbox":{"hydrated":true}}\' ;; stop) echo "stop $2" >> ~/events ;; esac\n',
     { mode: 0o755 }
   );
   const started = Date.now();
@@ -262,9 +265,13 @@ test("before each job the hook clears the last job's files, containers and temp 
     `#!/usr/bin/env bash\ntrap 'exit 0' TERM\nGITHUB_WORKSPACE='${ws}' "$ACTIONS_RUNNER_HOOK_JOB_STARTED"\nwhile true; do sleep 0.2; done\n`,
     { mode: 0o755 }
   );
-  writeFileSync(path.join(home, ".ascii", "boat"), "#!/usr/bin/env bash\n", {
-    mode: 0o755,
-  });
+  writeFileSync(
+    path.join(home, ".ascii", "boat"),
+    `#!/usr/bin/env bash\n[ "$1" = info ] && echo '{"sandbox":{"hydrated":true}}'\nexit 0\n`,
+    {
+      mode: 0o755,
+    }
+  );
   execFileSync("bash", ["-c", runnerScript("acme/app", "boat-4vcpu", 2)], {
     env: {
       HOME: home,
@@ -365,4 +372,94 @@ test("burst runners stay warm longer in working hours", () => {
   const at = (h) => new Date(Date.UTC(2026, 9, 23, h));
   assert.equal(burstIdleSeconds(env, at(23)), 1800);
   assert.equal(burstIdleSeconds(env, at(12)), 300);
+});
+
+test("the safety TTL keeps a deadline a margin ahead of now, counted from creation", () => {
+  const now = Date.parse("2026-10-23T12:00:00Z");
+  assert.equal(safetyTtl("2026-10-23T11:00:00Z", now, 1800), 3600 + 1800);
+  assert.equal(safetyTtl("2026-10-23T12:00:00Z", now, 1800), 1800);
+});
+
+test("only boat jobs queued past the grace count as missed webhooks", () => {
+  const now = Date.parse("2026-10-23T12:00:00Z");
+  const job = (status, labels, minutesAgo) => ({
+    status,
+    labels,
+    created_at: new Date(now - minutesAgo * 60_000).toISOString(),
+  });
+  const ids = missedJobs(
+    [
+      job("queued", ["boat-4vcpu"], 6),
+      job("queued", ["boat-4vcpu"], 2),
+      job("in_progress", ["boat-4vcpu"], 9),
+      job("queued", ["macos-15"], 9),
+    ],
+    now
+  ).map((j) => j.labels[0] + ":" + j.status);
+  assert.deepEqual(ids, ["boat-4vcpu:queued"]);
+});
+
+test("the runner registers only after the sandbox reports hydrated", () => {
+  const home = mkdtempSync(path.join(tmpdir(), "boat-hydrate-"));
+  const runner = path.join(home, "actions-runner");
+  mkdirSync(runner);
+  mkdirSync(path.join(home, ".ascii"));
+  writeFileSync(
+    path.join(runner, "config.sh"),
+    "#!/usr/bin/env bash\necho configured >> ~/events\n",
+    { mode: 0o755 }
+  );
+  writeFileSync(path.join(runner, "run.sh"), "#!/usr/bin/env bash\nexit 0\n", {
+    mode: 0o755,
+  });
+  // Not hydrated on the first check, hydrated on the second.
+  writeFileSync(
+    path.join(home, ".ascii", "boat"),
+    `#!/usr/bin/env bash
+if [ "$1" = info ]; then
+  n=$(cat ~/checks 2>/dev/null || echo 0); n=$((n + 1)); echo $n > ~/checks
+  echo "check $n" >> ~/events
+  [ $n -ge 2 ] && echo '{"sandbox":{"hydrated":true}}' || echo '{"sandbox":{"hydrated":false}}'
+fi
+exit 0
+`,
+    { mode: 0o755 }
+  );
+  execFileSync("bash", ["-c", runnerScript("acme/app", "boat-4vcpu", 1)], {
+    env: {
+      HOME: home,
+      PATH: process.env.PATH,
+      GH_REG: "reg",
+      BOAT_ID: "bx_test",
+    },
+    timeout: 30_000,
+  });
+  const events = readFileSync(path.join(home, "events"), "utf8")
+    .trim()
+    .split("\n");
+  assert.deepEqual(events, ["check 1", "check 2", "configured"]);
+  assert.match(
+    readFileSync(path.join(runner, ".env"), "utf8"),
+    /LC_ALL=C\.UTF-8/
+  );
+});
+
+test("a runner sandbox with no registration after boot is an orphan", () => {
+  const now = Date.parse("2026-10-23T12:00:00Z");
+  const sb = (id, minutesAgo, name = `gh-boat-4vcpu-burst-${id}`) => ({
+    id,
+    name,
+    createdAt: new Date(now - minutesAgo * 60_000).toISOString(),
+  });
+  const live = [
+    sb("bx_ok", 30),
+    sb("bx_gone", 30),
+    sb("bx_booting", 3),
+    sb("bx_mine", 30, "dev-box"),
+  ];
+  const runners = [{ name: "bx_ok" }];
+  assert.deepEqual(
+    orphanSandboxes(live, runners, now).map((s) => s.id),
+    ["bx_gone"]
+  );
 });

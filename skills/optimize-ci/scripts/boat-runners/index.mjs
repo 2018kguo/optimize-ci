@@ -105,6 +105,43 @@ export function burstIdleSeconds(env, now = new Date()) {
     : Number(env.IDLE_SECONDS_OFF_HOURS ?? 300);
 }
 
+// Boat's auto-stop counts from creation, so the safety TTL is the machine's
+// age plus a margin, refreshed every schedule tick.
+export const SAFETY_TTL_SECONDS = 1800;
+export function safetyTtl(
+  createdAt,
+  now = Date.now(),
+  margin = SAFETY_TTL_SECONDS
+) {
+  return Math.ceil((now - Date.parse(createdAt)) / 1000) + margin;
+}
+
+// Runner sandboxes with no registered runner after boot: the runner died, or
+// Boat restored the machine onto a new host (processes gone, setup script not
+// rerun). The safety TTL would keep them alive, so they're stopped instead.
+export const ORPHAN_AFTER_MS = 10 * 60_000;
+export function orphanSandboxes(live, runners, now = Date.now()) {
+  const registered = new Set(runners.map((runner) => runner.name));
+  return live.filter(
+    (sandbox) =>
+      parseSandboxName(sandbox.name) &&
+      !registered.has(sandbox.id) &&
+      now - Date.parse(sandbox.createdAt) > ORPHAN_AFTER_MS
+  );
+}
+
+// Queued jobs on our labels whose webhook we probably missed: GitHub drops
+// some and never redelivers one that got an error.
+export const MISSED_AFTER_MS = 5 * 60_000;
+export function missedJobs(jobs, now = Date.now()) {
+  return jobs.filter(
+    (job) =>
+      job.status === "queued" &&
+      boatLabel(job.labels ?? []) &&
+      now - Date.parse(job.created_at) > MISSED_AFTER_MS
+  );
+}
+
 // Baseline sandboxes to stop: idle ones past their age (rolls out snapshot
 // and boot-script changes) and idle ones beyond the current target (the
 // baseline drains outside its hour window). A busy runner is never chosen.
@@ -151,6 +188,14 @@ HOOK
 chmod +x ~/job-started.sh
 export ACTIONS_RUNNER_HOOK_JOB_STARTED=~/job-started.sh
 cd ~/actions-runner
+# Jobs get the locale GitHub-hosted runners use (Boat's default sorts differently).
+printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' >> .env
+# The snapshot's disk arrives lazily; a job started before it is local runs
+# slower. Register only once the sandbox reports hydrated (bounded wait).
+for _ in $(seq 1 150); do
+  [ "$(~/.ascii/boat info "$BOAT_ID" --json 2>/dev/null | jq -r '.sandbox.hydrated // empty' 2>/dev/null)" = true ] && break
+  sleep 2
+done
 ./config.sh --unattended --url "https://github.com/${repo}" --token "$GH_REG" \\
   --name "$BOAT_ID" --labels "${label}" --replace${ephemeral} > ~/runner.log 2>&1
 # The registration token can register a runner with any label, including a
@@ -284,7 +329,9 @@ async function startRunner(label, kind) {
       from: process.env.SNAPSHOT,
       type: SIZES[label],
       snapshots: false,
-      ttlSeconds: null,
+      // A deadline from creation; the schedule pushes it forward every tick, so
+      // machines stop by themselves if the controller dies.
+      ttlSeconds: SAFETY_TTL_SECONDS,
       setupScript: runnerScript(repo, label, idle),
       env: { GH_REG: token },
     }),
@@ -446,6 +493,53 @@ async function onSchedule() {
     }
     for (let count = baseline.length; count < target; count += 1) {
       await startRunner(label, "base");
+    }
+  }
+
+  // Stop runner sandboxes whose runner is gone, before refreshing deadlines.
+  const orphans = new Set(
+    orphanSandboxes(live, runners).map((sandbox) => sandbox.id)
+  );
+  for (const id of orphans) {
+    await boat(`/sandboxes/${id}/stop`, { method: "POST" });
+    console.log(
+      JSON.stringify({ event: "runner.orphan_stopped", sandbox: id })
+    );
+  }
+
+  // Safety net: keep every runner sandbox's deadline a margin ahead of now.
+  for (const sandbox of live) {
+    if (orphans.has(sandbox.id)) continue;
+    if (!parseSandboxName(sandbox.name)) continue;
+    try {
+      await boat(`/sandboxes/${sandbox.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ ttlSeconds: safetyTtl(sandbox.createdAt) }),
+      });
+    } catch (error) {
+      console.log(
+        JSON.stringify({
+          event: "ttl.refresh_failed",
+          sandbox: sandbox.id,
+          message: String(error.message),
+        })
+      );
+    }
+  }
+
+  // Missed webhooks: re-enqueue jobs that have sat queued too long.
+  const queuedRuns =
+    (await github(`/repos/${repo}/actions/runs?status=queued&per_page=50`))
+      .workflow_runs ?? [];
+  for (const run of queuedRuns) {
+    const { jobs = [] } = await github(
+      `/repos/${repo}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`
+    );
+    for (const job of missedJobs(jobs)) {
+      await sendJob({ jobId: job.id, label: boatLabel(job.labels) }, 0);
+      console.log(
+        JSON.stringify({ event: "job.requeued_missed", job: job.id })
+      );
     }
   }
 
