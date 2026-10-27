@@ -18,14 +18,18 @@ import {
   burstIdleSeconds,
   idleRunners,
   inHourWindow,
+  jobLabel,
   missedJobs,
   orphanSandboxes,
   safetyTtl,
   nextStep,
   parseSandboxName,
   runnerScript,
+  runnerSource,
   sandboxName,
   staleRunner,
+  trustedSnapshotRun,
+  untrustedSnapshotJobs,
   verifySignature,
 } from "./index.mjs";
 
@@ -53,7 +57,10 @@ test("sandbox names round-trip label and kind", () => {
   });
   assert.deepEqual(
     parseSandboxName(sandboxName("boat-2vcpu-once", "burst", "bx_abc")),
-    { label: "boat-2vcpu-once", kind: "burst" }
+    {
+      label: "boat-2vcpu-once",
+      kind: "burst",
+    }
   );
   assert.equal(parseSandboxName("some-other-name"), null);
   assert.equal(parseSandboxName(), null);
@@ -96,7 +103,11 @@ test("cleanup removes only offline registrations of ours whose sandbox is gone",
   );
   assert.equal(
     staleRunner(
-      { name: "bx_gone", status: "offline", labels: [label("some-other-runner")] },
+      {
+        name: "bx_gone",
+        status: "offline",
+        labels: [label("some-other-runner")],
+      },
       live
     ),
     false
@@ -126,10 +137,19 @@ test("only old baseline sandboxes with an idle online runner are retired", () =>
 // Runs the real boot script with a stub runner and a stub `boat`. The stub
 // runs one "job" (a process named Runner.Worker) jobAt seconds in, for
 // jobSeconds, then waits for a signal like a real listener.
-function boot({ idle, jobAt = null, jobSeconds = 2, runsOn = "boat-4vcpu" }) {
+function boot({
+  idle,
+  jobAt = null,
+  jobSeconds = 2,
+  runsOn = "boat-4vcpu",
+  jobPasses = false,
+}) {
   const home = mkdtempSync(path.join(tmpdir(), "boat-runner-"));
   const runner = path.join(home, "actions-runner");
   mkdirSync(runner);
+  // What a registered runner leaves on disk.
+  writeFileSync(path.join(runner, ".credentials"), "secret");
+  mkdirSync(path.join(runner, "_diag"));
   mkdirSync(path.join(home, ".ascii"));
   writeFileSync(
     path.join(runner, "config.sh"),
@@ -139,7 +159,7 @@ function boot({ idle, jobAt = null, jobSeconds = 2, runsOn = "boat-4vcpu" }) {
   const job =
     jobAt === null
       ? ""
-      : `sleep ${jobAt}; bash -c 'exec -a \"$HOME/actions-runner/bin/Runner.Worker\" sleep ${jobSeconds}'; echo job-done >> ~/events`;
+      : `sleep ${jobAt}; bash -c 'exec -a \"$HOME/actions-runner/bin/Runner.Worker\" sleep ${jobSeconds}'; ${jobPasses ? "touch ~/snapshot-ready; " : ""}echo job-done >> ~/events`;
   writeFileSync(
     path.join(runner, "run.sh"),
     `#!/usr/bin/env bash
@@ -154,19 +174,23 @@ while true; do sleep 0.2; done
   );
   writeFileSync(
     path.join(home, ".ascii", "boat"),
-    '#!/usr/bin/env bash\ncase "$1" in info) echo \'{"sandbox":{"hydrated":true}}\' ;; stop) echo "stop $2" >> ~/events ;; esac\n',
+    '#!/usr/bin/env bash\ncase "$1" in info) echo \'{"sandbox":{"hydrated":true}}\' ;; stop) echo "stop $2" >> ~/events ;; snapshot) [ -e ~/actions-runner/.credentials ] && echo creds-in-snapshot >> ~/events; echo "snapshot $2 $3" >> ~/events ;; esac\n',
     { mode: 0o755 }
   );
   const started = Date.now();
-  execFileSync("bash", ["-c", runnerScript("acme/app", runsOn, idle)], {
-    env: {
-      HOME: home,
-      PATH: process.env.PATH,
-      GH_REG: "reg",
-      BOAT_ID: "bx_test",
-    },
-    timeout: 30_000,
-  });
+  execFileSync(
+    "bash",
+    ["-c", runnerScript("acme/app", runsOn, idle, "gh-runner")],
+    {
+      env: {
+        HOME: home,
+        PATH: process.env.PATH,
+        GH_REG: "reg",
+        BOAT_ID: "bx_test",
+      },
+      timeout: 30_000,
+    }
+  );
   return {
     events: readFileSync(path.join(home, "events"), "utf8").trim().split("\n"),
     seconds: (Date.now() - started) / 1000,
@@ -461,5 +485,163 @@ test("a runner sandbox with no registration after boot is an orphan", () => {
   assert.deepEqual(
     orphanSandboxes(live, runners, now).map((s) => s.id),
     ["bx_gone"]
+  );
+});
+
+test("the snapshot build saves its disk only after a passing job, without the runner's credentials", () => {
+  const build = { idle: 0, jobAt: 1, jobSeconds: 1, runsOn: "boat-snapshot" };
+  assert.deepEqual(boot({ ...build, jobPasses: true }).events, [
+    "configured",
+    "job-done",
+    "snapshot bx_test gh-runner-warm",
+    "stop bx_test",
+  ]);
+  assert.deepEqual(boot(build).events, [
+    "configured",
+    "job-done",
+    "stop bx_test",
+  ]);
+});
+
+test("only default-branch runs claim the snapshot build, and -once runners never start from it", () => {
+  const job = (head_branch, labels = ["boat-snapshot"]) => ({
+    status: "queued",
+    labels,
+    head_branch,
+  });
+  assert.equal(jobLabel(job("main")), "boat-snapshot");
+  assert.equal(jobLabel(job("feature/poison")), null);
+  assert.equal(jobLabel(job("x", ["boat-8vcpu"])), "boat-8vcpu");
+  assert.equal(
+    untrustedSnapshotJobs([
+      job("main"),
+      job("feature/poison"),
+      job("x", ["boat-8vcpu"]),
+    ]).length,
+    1
+  );
+  const env = { SNAPSHOT: "gh-runner", WARM_SNAPSHOT: "gh-runner-warm" };
+  assert.equal(runnerSource("boat-8vcpu", env), "gh-runner-warm");
+  assert.equal(runnerSource("boat-8vcpu-once", env), "gh-runner");
+  assert.equal(runnerSource("boat-snapshot", env), "gh-runner");
+  assert.equal(
+    runnerSource("boat-8vcpu", { ...env, WARM_SNAPSHOT: "" }),
+    "gh-runner"
+  );
+});
+
+// The job-started hook exactly as runnerScript writes it.
+function hookExit(label, env) {
+  const script = runnerScript("acme/app", label, 0, "gh-runner");
+  const hook = script.split("<<'HOOK'\n")[1].split("\nHOOK\n")[0];
+  const home = mkdtempSync(path.join(tmpdir(), "boat-hook-"));
+  const file = path.join(home, "hook.sh");
+  writeFileSync(file, hook, { mode: 0o755 });
+  try {
+    execFileSync("bash", [file], {
+      env: { PATH: process.env.PATH, HOME: home, TMPDIR: home, ...env },
+      stdio: "pipe",
+    });
+    return 0;
+  } catch (error) {
+    return error.status;
+  }
+}
+
+test("the build runner's hook fails every job but main's own snapshot workflow before a step runs", () => {
+  const main = {
+    GITHUB_REPOSITORY: "acme/app",
+    GITHUB_EVENT_NAME: "schedule",
+    GITHUB_WORKFLOW_REF:
+      "acme/app/.github/workflows/runner-snapshot.yml@refs/heads/main",
+  };
+  assert.equal(hookExit("boat-snapshot", main), 0);
+  assert.equal(
+    hookExit("boat-snapshot", {
+      ...main,
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+    }),
+    0
+  );
+  for (const untrusted of [
+    { GITHUB_EVENT_NAME: "pull_request" },
+    {
+      GITHUB_WORKFLOW_REF:
+        "acme/app/.github/workflows/poison.yml@refs/heads/main",
+    },
+    {
+      GITHUB_WORKFLOW_REF:
+        "acme/app/.github/workflows/runner-snapshot.yml@refs/heads/feature",
+    },
+    { GITHUB_REPOSITORY: "fork/app" },
+    { GITHUB_WORKFLOW_REF: "" },
+  ]) {
+    assert.notEqual(
+      hookExit("boat-snapshot", { ...main, ...untrusted }),
+      0,
+      JSON.stringify(untrusted)
+    );
+  }
+  // Reused runners take any job; their hook only cleans up.
+  assert.equal(
+    hookExit("boat-8vcpu", { GITHUB_EVENT_NAME: "pull_request" }),
+    0
+  );
+  assert.match(
+    runnerScript("acme/app", "boat-snapshot", 0),
+    /--labels boat-snapshot --no-default-labels /
+  );
+});
+
+test("a snapshot job's run must be main's schedule or dispatch of the workflow in this repo", () => {
+  const run = {
+    event: "schedule",
+    path: ".github/workflows/runner-snapshot.yml",
+    head_branch: "main",
+    head_repository: { full_name: "acme/app" },
+  };
+  assert.equal(trustedSnapshotRun(run, "acme/app"), true);
+  for (const change of [
+    { event: "pull_request" },
+    { path: ".github/workflows/poison.yml" },
+    { head_branch: "feature" },
+    // A fork's own main branch.
+    { head_repository: { full_name: "someone/app" } },
+  ]) {
+    assert.equal(
+      trustedSnapshotRun({ ...run, ...change }, "acme/app"),
+      false,
+      JSON.stringify(change)
+    );
+  }
+});
+
+test("missed snapshot jobs are requeued and their stale registrations removed", () => {
+  const old = new Date(Date.now() - 10 * 60_000).toISOString();
+  const jobs = [
+    {
+      status: "queued",
+      labels: ["boat-snapshot"],
+      head_branch: "main",
+      created_at: old,
+    },
+    {
+      status: "queued",
+      labels: ["boat-snapshot"],
+      head_branch: "feature",
+      created_at: old,
+    },
+  ];
+  assert.equal(missedJobs(jobs).length, 1);
+  assert.equal(
+    staleRunner(
+      {
+        status: "offline",
+        name: "bx_gone",
+        labels: [{ name: "boat-snapshot" }],
+      },
+      new Set()
+    ),
+    true
   );
 });

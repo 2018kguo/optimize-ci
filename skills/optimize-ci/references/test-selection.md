@@ -134,6 +134,14 @@ changed. A selector step marked `continue-on-error` that crashes writes no
 outputs; if any gate reads a missing output as "off", lanes stop running and
 nothing complains.
 
+Alarm when the model is unreachable. A rejected API key or a provider outage
+makes every request fail. A selector that falls back without saying so keeps
+PRs green while it selects worse, with nothing in the logs but a count of
+failed requests. Have the selector write an output when it called the model
+and every request failed, and fail a small job on main when it is set, so
+the red-main alert carries it. A run that answered everything from its cache
+made no requests and is not an outage.
+
 Selectors that run in a sparse checkout without installed dependencies must
 not import packages statically. Fetch pinned packages explicitly and import
 them dynamically, and add a test that walks the selector's static imports.

@@ -71,7 +71,8 @@ flakes and infrastructure (`references/test-cpu.md`).
 tests, we walk the import graph from the diff, then a decision model picks
 the tests that actually execute the changed code, asking about folders first
 and then single tests inside the folders it keeps. A replay of real past
-failures checks that selection still catches them, and the full suite runs
+failures checks that selection still catches them, main alarms if the model
+stops answering, and the full suite runs
 on main every few hours. This is the one to get right: it needs the scheduled
 full run and a red-main alert in place before it goes live
 (`references/test-selection.md`).
@@ -94,8 +95,10 @@ defaults agents still reach for).
 as much per minute, and because our runners stay up between jobs, a warm job
 spends a second or two on setup instead of tens of seconds. Most of what's
 left on the bill is machines waiting for work, so the warm pool follows
-working hours (`references/boat-runners.md`, with the autoscaler in
-`scripts/boat-runners/`). Runner sizing and sharding are in
+working hours. What's left of the slow tail is a runner's first job, so a
+nightly job on main builds a warm snapshot with the dependencies and
+toolchains already installed (`references/boat-runners.md`, with the
+autoscaler in `scripts/boat-runners/`). Runner sizing and sharding are in
 `references/runners.md`.
 
 ## Before you change anything

@@ -50,6 +50,15 @@ claiming dollars.
   shape (same core count, same concurrency) and by CPU-seconds.
 - "Boot time" measured as spawn-to-first-output includes the first test's
   body. Measure boot with a test that does nothing.
+- On reused runners, split runs by whether any job was a runner's first.
+  Pickup latency doesn't show it: a runner that was already idle picks up
+  at once and then spends minutes downloading toolchains and installing.
+  Count each runner's jobs too; if most take only a handful before
+  stopping, first jobs are a large share of the tail.
+- Look for bimodal steps. A step that is usually seconds and occasionally
+  minutes, on ordinary diffs, while the same work under another config stays
+  fast, is a stall. Reproduce it locally before tuning anything: if a cold
+  run there is fast, look at the environment, not the code.
 - Job teardown has a tail that the provider controls. Don't optimize what
   you can't change.
 

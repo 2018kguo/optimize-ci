@@ -18,7 +18,7 @@ Ballparks for the same workflows at a few thousand jobs a day:
 |---|---|---|
 | Runner cost per day (machine time) | A few tens of dollars | A few dollars: a small warm pool plus job time, which alone is roughly an order of magnitude cheaper |
 | Checkout plus install on a warm job | Several seconds to tens of seconds | A second or two each |
-| Same job on a fresh machine | A minute or two of setup | Similar or worse, because the disk arrives lazily (section 3) |
+| Same job on a fresh machine | A minute or two of setup | Similar or worse from a lean snapshot, because the disk arrives lazily (section 3); a warm snapshot (section 7) skips most of it |
 | Queue wait | Seconds | Near zero on an idle runner; tens of seconds when a new one has to start |
 | Heavy test lanes | Baseline | About the same per core |
 
@@ -124,10 +124,14 @@ What it means for CI:
   end to end, because the job then runs at full speed.
 - **Don't write a lot before `hydrated`.** A heavy writer during the restore
   makes it take much longer.
-- **Keep the snapshot small.** Restore time follows the size of your changes
-  from the base image. A snapshot pre-filled with a big package cache made our
-  fresh sandboxes slower, not faster. Keep work directories out of snapshots
-  with `.boatignore` (gitignore syntax).
+- **Size the snapshot to what it saves.** Restore time grows with your
+  changes from the base image, but much less than in proportion: a snapshot
+  several times larger hydrated in a minute or two, not several times
+  longer. A package *cache* alone isn't worth it, because the install still
+  has to link everything. A snapshot holding the installed workspace and the
+  tool cache is, because the first job's install becomes a no-op
+  (section 7). Keep scratch directories out with `.boatignore` (gitignore
+  syntax).
 - **Prefetching over the network doesn't help.** Once hydrated, reading your
   hot files once warms the page cache in seconds, but reading ahead during
   the restore just competes with it.
@@ -191,8 +195,9 @@ every time; deploys are rare enough that this is fine.
   explicitly.
 - **systemd units don't read `/etc/environment`.** A runner started as a unit
   needs its full `PATH`.
-- **Docker images in snapshots.** A named snapshot keeps only images that a
-  container uses.
+- **Docker images in snapshots.** Don't assume which images a snapshot
+  keeps. Boot a sandbox from it and run `docker images`; if one is missing,
+  create a container from it before saving.
 - **x64 Linux only.** macOS and arm64 jobs stay elsewhere.
 
 ### State between jobs on one machine
@@ -279,10 +284,70 @@ every time; deploys are rare enough that this is fine.
 
 Build it from a fresh `boat new`: the Actions runner at `~/actions-runner`
 with its dependencies, a recent git, and the tools every job would otherwise
-install. Keep it lean (section 3). Rebuild from a fresh box rather than one
-that has lived through many resumes. Saving under the same name replaces the
-snapshot, and the baseline's age-based replacement rolls it out.
+install. This lean snapshot holds the runner and system tools only; the
+workspace, dependencies and toolchains go in the warm one below. Rebuild
+from a fresh box, not one that has lived through many resumes. Saving under
+the same name replaces the snapshot, and the baseline's age-based
+replacement rolls it out.
 `scripts/boat-runners/build-runner-snapshot.sh` builds one.
+
+### A warm snapshot, built by a scheduled job
+
+On a fresh runner from the lean snapshot, the first job pays for everything:
+the full install, every `setup-*` download, docker pulls, browser installs.
+When runners take only a few jobs each before they stop, a large share of
+PR runs hit a first job, and those runs make up the slow tail. Measure this
+before building anything (`measure.md`: split runs by whether any job was a
+runner's first).
+
+The fix is a second snapshot that already holds that setup, refreshed on a
+schedule:
+
+- **Build it with the real setup actions, in CI.** A scheduled workflow on
+  the default branch runs the same `setup-*` actions and versions as the
+  heavy jobs, then installs dependencies and pulls the service images. The
+  actions fill the tool cache under `_work/_tool` with the layout and
+  completion markers the jobs' own setup steps look for, which a hand-built
+  script rarely matches. The repository lands at the same `_work` path the
+  jobs use, so their checkout is an incremental fetch.
+- **Let the machine save itself.** The controller gives the snapshot label
+  one sandbox with snapshots enabled and a hard TTL. Boat puts a token in
+  every sandbox that can act only on that sandbox, which is enough to save
+  it live as a named snapshot. That token can't delete the sandbox, so the
+  machine just stops and Boat's retention removes it later. The same scoping
+  means a job on an ordinary runner can't touch other sandboxes, and a
+  sandbox created with snapshots off can't be saved at all. Only the named snapshot is
+  kept, and saving under the same name replaces it.
+- **Save only a good build.** The workflow's last step writes a marker file.
+  The boot script snapshots only when the marker exists, after removing the
+  runner's registration (`.runner`, `.credentials*`), `_diag`, `_work/_temp`
+  and its own log. Check out with `persist-credentials: false` so no token
+  lands in `.git/config`.
+- **Guard who can write it, on the machine.** Every reused runner boots from
+  this disk, and GitHub hands a runner any queued job its labels match. The
+  marker only proves that a job's last step ran, and any job can create it.
+  So: register the build runner with `--no-default-labels` (otherwise
+  `runs-on: self-hosted` matches it), and have its job-started hook fail
+  any job whose `GITHUB_WORKFLOW_REF` isn't the snapshot workflow on the
+  default branch of this repository, or whose event isn't `schedule` or
+  `workflow_dispatch`. The hook runs before any of the job's steps. In the
+  controller, check the job's run (event, workflow path, head repository)
+  before starting a build; `head_branch` alone also matches a fork's branch
+  of the same name. While another job is queued on the label, wait and
+  recheck. `-once` labels keep starting from the lean snapshot.
+- **Roll it out behind a variable.** Leave the warm snapshot unset until the
+  first build exists, boot a sandbox from it and look: no registration, no
+  credentials, tools and `node_modules` present, and a first install that
+  does nothing. Then set the variable. Clearing it sends every runner back
+  to the lean snapshot.
+
+The trade: a warm sandbox takes longer to report `hydrated`, and a burst
+runner waits for that before it registers, so give a queued job longer
+before starting a second runner for it. The first job then skips minutes
+of setup, so the net is still a clear win for bursts, and almost all of the
+saving for baseline runners, which hydrate before any job arrives. The extra
+hydration time is billed, but it is about what the skipped setup would have
+cost. `scripts/boat-runners/runner-snapshot.yml` is a starting workflow.
 
 ## 8. Moving workflows over
 

@@ -10,7 +10,8 @@ is how to stand it up.
 | `index.mjs` | The Lambda handler: webhook, queue worker and schedule, plus the boot script each sandbox runs |
 | `index.test.mjs` | Unit tests, and tests that run the real boot script against a stub runner (`node --test index.test.mjs`) |
 | `main.tf` | OpenTofu stack: secret, queues, function, function URL, schedule, dead-letter alarm |
-| `build-runner-snapshot.sh` | Builds the named snapshot runners start from |
+| `build-runner-snapshot.sh` | Builds the lean snapshot runners start from |
+| `runner-snapshot.yml` | Example workflow for the warm snapshot: copy to `.github/workflows/`, replace the setup steps with your heavy jobs' own, then set `warm_snapshot` once a build checks out |
 
 Labels: `boat-2vcpu`, `boat-4vcpu`, `boat-8vcpu`, `boat-16vcpu` for reused
 runners, and the same names with `-once` for single-use runners. One

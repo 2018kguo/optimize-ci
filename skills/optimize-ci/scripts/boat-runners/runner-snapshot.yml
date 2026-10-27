@@ -1,0 +1,46 @@
+name: Runner snapshot
+
+# Builds <snapshot>-warm, the snapshot reused Boat runners start from (see
+# references/boat-runners.md, "A warm snapshot"). The controller gives the
+# boat-snapshot label one fresh sandbox, only for the default branch, and
+# saves its disk after the job if the marker below exists. Use the same
+# setup actions and versions as your heavy jobs, so the tool cache lands
+# where their setup steps look.
+on:
+  schedule:
+    # Before the warm pool comes up for the day.
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-snapshot
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: boat-snapshot
+    timeout-minutes: 30
+    steps:
+      # No token on disk: every runner starts from this one.
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+          persist-credentials: false
+      # Replace from here with your heavy jobs' setup steps.
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Pull the test service images
+        run: docker pull -q postgres:16
+      - name: Mark the build good
+        run: touch ~/snapshot-ready

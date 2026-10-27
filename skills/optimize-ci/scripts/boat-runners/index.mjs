@@ -37,8 +37,59 @@ export const SIZES = Object.fromEntries(
 );
 const PREFIX = "gh-";
 
+// The scheduled runner-snapshot workflow (runner-snapshot.yml) runs on this
+// label: one sandbox from the clean snapshot does the heavy jobs' setup
+// (toolchains, dependencies, docker images), then saves itself as
+// `<SNAPSHOT>-warm`, which reused runners start from. Every runner starts
+// from that disk, so only a run on the default branch can claim it; -once
+// labels keep the clean snapshot.
+export const SNAPSHOT_LABEL = "boat-snapshot";
+export const DEFAULT_BRANCH = "main";
+export const SNAPSHOT_WORKFLOW = ".github/workflows/runner-snapshot.yml";
+export const warmSnapshotName = (snapshot) => `${snapshot}-warm`;
+
 export function boatLabel(labels) {
   return labels.find((label) => label in SIZES) ?? null;
+}
+
+// The label the controller serves a job on, or null.
+export function jobLabel(job) {
+  const labels = job?.labels ?? [];
+  if (labels.includes(SNAPSHOT_LABEL)) {
+    return job.head_branch === DEFAULT_BRANCH ? SNAPSHOT_LABEL : null;
+  }
+  return boatLabel(labels);
+}
+
+// GitHub gives a runner any queued job with its label, so a PR workflow that
+// asks for SNAPSHOT_LABEL could take the build runner and save its own disk
+// for every runner. The build starts only while no such job waits.
+export function untrustedSnapshotJobs(jobs) {
+  return jobs.filter(
+    (job) =>
+      job.status === "queued" &&
+      (job.labels ?? []).includes(SNAPSHOT_LABEL) &&
+      jobLabel(job) === null
+  );
+}
+
+// The run a snapshot job belongs to must be the default branch's own
+// schedule or dispatch of SNAPSHOT_WORKFLOW in this repository: head_branch
+// alone matches a fork's branch of the same name. The build runner's
+// job-started hook checks the same.
+export function trustedSnapshotRun(run, repo) {
+  return (
+    ["schedule", "workflow_dispatch"].includes(run?.event) &&
+    run.path === SNAPSHOT_WORKFLOW &&
+    run.head_branch === DEFAULT_BRANCH &&
+    run.head_repository?.full_name === repo
+  );
+}
+
+// Which snapshot a new runner starts from.
+export function runnerSource(label, env) {
+  if (label === SNAPSHOT_LABEL || label.endsWith("-once")) return env.SNAPSHOT;
+  return env.WARM_SNAPSHOT || env.SNAPSHOT;
 }
 
 export function verifySignature(secret, rawBody, header) {
@@ -78,7 +129,7 @@ export function staleRunner(runner, liveSandboxIds) {
   return (
     runner.status === "offline" &&
     runner.name.startsWith("bx_") &&
-    runner.labels.some((l) => l.name in SIZES) &&
+    runner.labels.some((l) => l.name in SIZES || l.name === SNAPSHOT_LABEL) &&
     !liveSandboxIds.has(runner.name)
   );
 }
@@ -137,7 +188,7 @@ export function missedJobs(jobs, now = Date.now()) {
   return jobs.filter(
     (job) =>
       job.status === "queued" &&
-      boatLabel(job.labels ?? []) &&
+      jobLabel(job) &&
       now - Date.parse(job.created_at) > MISSED_AFTER_MS
   );
 }
@@ -167,8 +218,29 @@ export function baselineToRetire(
 // first job). With idleSeconds > 0 the runner shuts down after that long without a
 // job, and the sandbox stops itself (created without snapshots, a stopped
 // sandbox is erased). The controller then deletes the offline registration.
-export function runnerScript(repo, label, idleSeconds) {
-  const ephemeral = label.endsWith("-once") ? " --ephemeral" : "";
+export function runnerScript(repo, label, idleSeconds, snapshot = "") {
+  const build = label === SNAPSHOT_LABEL;
+  const ephemeral = label.endsWith("-once") || build ? " --ephemeral" : "";
+  // GitHub hands a runner any queued job its labels match, and every reused
+  // runner boots from the build's disk. So the build runner has no default
+  // labels (self-hosted, Linux, X64), and its hook fails any job that is not
+  // the default branch's schedule or dispatch of SNAPSHOT_WORKFLOW before a
+  // step runs, so such a job can never write the marker.
+  const labels = build ? `${label} --no-default-labels` : label;
+  const trust = build
+    ? `case "\${GITHUB_EVENT_NAME:-}" in schedule|workflow_dispatch) ;; *) echo "snapshot build: refusing event \${GITHUB_EVENT_NAME:-}" >&2; exit 1 ;; esac
+[ "\${GITHUB_REPOSITORY:-}" = "${repo}" ] && [ "\${GITHUB_WORKFLOW_REF:-}" = "${repo}/${SNAPSHOT_WORKFLOW}@refs/heads/${DEFAULT_BRANCH}" ] || { echo "snapshot build: refusing \${GITHUB_WORKFLOW_REF:-unknown}" >&2; exit 1; }
+`
+    : "";
+  // The snapshot build saves its disk only after its job wrote the success
+  // marker, without this runner's registration, logs or job temp files.
+  const finish = build
+    ? `if [ -f ~/snapshot-ready ]; then
+  rm -rf ~/snapshot-ready ~/runner.log .runner .credentials .credentials_rsaparams _diag _work/_temp
+  ~/.ascii/boat snapshot "$BOAT_ID" ${warmSnapshotName(snapshot)}
+fi
+~/.ascii/boat stop "$BOAT_ID"`
+    : `~/.ascii/boat stop "$BOAT_ID"`;
   return `set -u
 # oxlint (and other mmap-pool allocators) reserve more virtual memory than
 # RAM + swap on the small sizes, which the default heuristic refuses.
@@ -178,7 +250,7 @@ sudo -n sysctl -q -w vm.overcommit_memory=1 2>/dev/null || true
 # runner's install is a quick reconcile instead of a cold install.
 cat > ~/job-started.sh <<'HOOK'
 #!/usr/bin/env bash
-ws="\${GITHUB_WORKSPACE:-}"
+${trust}ws="\${GITHUB_WORKSPACE:-}"
 [ -d "$ws/.git" ] && git -C "$ws" clean -ffdxq -e node_modules -e .turbo || true
 # The last job's containers and temp outputs (one job runs at a time, and
 # nothing else runs on the machine). Jobs write temp outputs under $TMPDIR/ci-*.
@@ -197,7 +269,7 @@ for _ in $(seq 1 150); do
   sleep 2
 done
 ./config.sh --unattended --url "https://github.com/${repo}" --token "$GH_REG" \\
-  --name "$BOAT_ID" --labels "${label}" --replace${ephemeral} > ~/runner.log 2>&1
+  --name "$BOAT_ID" --labels ${labels} --replace${ephemeral} > ~/runner.log 2>&1
 # The registration token can register a runner with any label, including a
 # -once one that deploy jobs trust. Boat puts it in this process's
 # environment, so replace this process with one that never had it: the
@@ -215,7 +287,7 @@ while kill -0 $runner 2>/dev/null; do
   fi
   sleep 2
 done
-~/.ascii/boat stop "$BOAT_ID"
+${finish}
 LOOP
 exec env -u GH_REG bash ~/runner-loop.sh
 `;
@@ -317,22 +389,28 @@ async function listRunners(repo) {
 }
 
 async function startRunner(label, kind) {
+  const build = label === SNAPSHOT_LABEL;
   const repo = process.env.REPOSITORY;
   const { token } = await github(
     `/repos/${repo}/actions/runners/registration-token`,
-    { method: "POST" }
+    {
+      method: "POST",
+    }
   );
-  const idle = kind === "base" ? 0 : burstIdleSeconds(process.env);
+  const idle = kind === "base" || build ? 0 : burstIdleSeconds(process.env);
   const body = await boat("/sandboxes", {
     method: "POST",
     body: JSON.stringify({
-      from: process.env.SNAPSHOT,
-      type: SIZES[label],
-      snapshots: false,
+      from: runnerSource(label, process.env),
+      type: build ? "xlarge" : SIZES[label],
+      // Only the build saves a snapshot; a stopped build sandbox keeps its
+      // disk for Boat's retention window, then Boat deletes it.
+      snapshots: build,
       // A deadline from creation; the schedule pushes it forward every tick, so
-      // machines stop by themselves if the controller dies.
-      ttlSeconds: SAFETY_TTL_SECONDS,
-      setupScript: runnerScript(repo, label, idle),
+      // machines stop by themselves if the controller dies. The build's name
+      // is not a runner name, so its hour is a hard cap.
+      ttlSeconds: build ? 3600 : SAFETY_TTL_SECONDS,
+      setupScript: runnerScript(repo, label, idle, process.env.SNAPSHOT),
       env: { GH_REG: token },
     }),
   });
@@ -367,7 +445,7 @@ async function onWebhook(event) {
     return { statusCode: 204 };
   }
   const payload = JSON.parse(raw);
-  const label = boatLabel(payload.workflow_job?.labels ?? []);
+  const label = jobLabel(payload.workflow_job);
   if (
     payload.action !== "queued" ||
     !label ||
@@ -411,15 +489,49 @@ async function sendJob(message, delaySeconds) {
 
 // Returns true when the job should be looked at again: the message then stays
 // on the queue, and SQS hands it back after the visibility timeout.
+async function queuedJobs(repo) {
+  const runs =
+    (await github(`/repos/${repo}/actions/runs?status=queued&per_page=50`))
+      .workflow_runs ?? [];
+  const jobs = [];
+  for (const run of runs) {
+    const page = await github(
+      `/repos/${repo}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`
+    );
+    jobs.push(...(page.jobs ?? []));
+  }
+  return jobs;
+}
+
 async function onQueuedJob({ jobId, label, startedAt, starts = 0 }) {
   const repo = process.env.REPOSITORY;
   const job = await github(`/repos/${repo}/actions/jobs/${jobId}`);
-  const step = nextStep({
-    queued: job.status === "queued",
-    idle: idleRunners(await listRunners(repo), label).length,
-    startedAt,
-    starts,
-  });
+  if (label === SNAPSHOT_LABEL && job.status === "queued") {
+    const run = await github(`/repos/${repo}/actions/runs/${job.run_id}`);
+    if (!trustedSnapshotRun(run, repo)) {
+      console.log(JSON.stringify({ event: "snapshot.untrusted", job: jobId }));
+      return false;
+    }
+    // Wait (recheck) while another job could take the build runner.
+    if (untrustedSnapshotJobs(await queuedJobs(repo)).length > 0) {
+      console.log(JSON.stringify({ event: "snapshot.waiting", job: jobId }));
+      return true;
+    }
+  }
+  const step = nextStep(
+    {
+      queued: job.status === "queued",
+      idle: idleRunners(await listRunners(repo), label).length,
+      startedAt,
+      starts,
+    },
+    {
+      maxStarts: label === SNAPSHOT_LABEL ? 1 : 3,
+      // A warm sandbox hydrates longer before its runner registers.
+      bootSeconds:
+        runnerSource(label, process.env) === process.env.SNAPSHOT ? 120 : 240,
+    }
+  );
   if (step !== "start") {
     return step === "recheck";
   }
@@ -528,19 +640,9 @@ async function onSchedule() {
   }
 
   // Missed webhooks: re-enqueue jobs that have sat queued too long.
-  const queuedRuns =
-    (await github(`/repos/${repo}/actions/runs?status=queued&per_page=50`))
-      .workflow_runs ?? [];
-  for (const run of queuedRuns) {
-    const { jobs = [] } = await github(
-      `/repos/${repo}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`
-    );
-    for (const job of missedJobs(jobs)) {
-      await sendJob({ jobId: job.id, label: boatLabel(job.labels) }, 0);
-      console.log(
-        JSON.stringify({ event: "job.requeued_missed", job: job.id })
-      );
-    }
+  for (const job of missedJobs(await queuedJobs(repo))) {
+    await sendJob({ jobId: job.id, label: jobLabel(job) }, 0);
+    console.log(JSON.stringify({ event: "job.requeued_missed", job: job.id }));
   }
 
   const liveIds = new Set(live.map((sandbox) => sandbox.id));

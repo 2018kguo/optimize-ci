@@ -47,6 +47,11 @@ variable "snapshot" {
   type        = string
   default     = "gh-runner"
 }
+variable "warm_snapshot" {
+  description = "Snapshot reused (non -once) runners start from: <snapshot>-warm, which runner-snapshot.yml saves on a schedule. Empty = the clean snapshot; set it only after checking the first build"
+  type        = string
+  default     = ""
+}
 variable "baseline" {
   description = "Always-on reusable runners per label; bursts above it start on demand and stop when idle"
   type        = map(number)
@@ -152,6 +157,7 @@ resource "aws_lambda_function" "this" {
       APP_ID                 = var.app_id
       INSTALLATION_ID        = var.installation_id
       SNAPSHOT               = var.snapshot
+      WARM_SNAPSHOT          = var.warm_snapshot
       BASELINE               = jsonencode(var.baseline)
       IDLE_SECONDS           = tostring(var.idle_seconds)
       IDLE_SECONDS_OFF_HOURS = tostring(var.idle_seconds_off_hours)
