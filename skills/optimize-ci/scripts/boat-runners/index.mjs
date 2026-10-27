@@ -182,16 +182,30 @@ export function orphanSandboxes(live, runners, now = Date.now()) {
 }
 
 // Queued jobs on our labels whose webhook we probably missed: GitHub drops
-// some and never redelivers one that got an error.
+// some and never redelivers one that got an error. A job's message lives
+// about 30 minutes (90 receives, 20 s apart), so a job still queued gets a
+// new one once per 30 minutes, in one 2-minute schedule slot. Requeueing on
+// every pass gave each waiting job a fresh start budget every 2 minutes and
+// kept GitHub's rate limit pinned while Boat's daily starts ran out.
 export const MISSED_AFTER_MS = 5 * 60_000;
+export const REQUEUE_EVERY_MS = 30 * 60_000;
+const SCHEDULE_MS = 2 * 60_000;
 export function missedJobs(jobs, now = Date.now()) {
-  return jobs.filter(
-    (job) =>
+  return jobs.filter((job) => {
+    const waited = now - Date.parse(job.created_at) - MISSED_AFTER_MS;
+    return (
       job.status === "queued" &&
       jobLabel(job) &&
-      now - Date.parse(job.created_at) > MISSED_AFTER_MS
-  );
+      waited > 0 &&
+      waited % REQUEUE_EVERY_MS < SCHEDULE_MS
+    );
+  });
 }
+
+// A reused runner that has run this long exits at its next idle moment, so
+// a job that breaks the machine (system packages, disk) cannot fail the jobs
+// after it for days.
+export const MAX_RUNNER_AGE_SECONDS = 6 * 3600;
 
 // Baseline sandboxes to stop: idle ones past their age (rolls out snapshot
 // and boot-script changes) and idle ones beyond the current target (the
@@ -218,7 +232,13 @@ export function baselineToRetire(
 // first job). With idleSeconds > 0 the runner shuts down after that long without a
 // job, and the sandbox stops itself (created without snapshots, a stopped
 // sandbox is erased). The controller then deletes the offline registration.
-export function runnerScript(repo, label, idleSeconds, snapshot = "") {
+export function runnerScript(
+  repo,
+  label,
+  idleSeconds,
+  snapshot = "",
+  maxAgeSeconds = MAX_RUNNER_AGE_SECONDS
+) {
   const build = label === SNAPSHOT_LABEL;
   const ephemeral = label.endsWith("-once") || build ? " --ephemeral" : "";
   // GitHub hands a runner any queued job its labels match, and every reused
@@ -278,11 +298,16 @@ cat > ~/runner-loop.sh <<'LOOP'
 cd ~/actions-runner
 ./run.sh >> ~/runner.log 2>&1 &
 runner=$!
-last=$(date +%s)
+born=$(date +%s)
+last=$born
 while kill -0 $runner 2>/dev/null; do
   # This runner's worker only: a runner can itself run inside a CI job.
-  pgrep -f "$HOME/actions-runner/bin/Runner.Worker" >/dev/null && last=$(date +%s)
+  busy=0
+  pgrep -f "$HOME/actions-runner/bin/Runner.Worker" >/dev/null && { busy=1; last=$(date +%s); }
   if [ ${idleSeconds} -gt 0 ] && [ $(( $(date +%s) - last )) -ge ${idleSeconds} ]; then
+    kill -TERM $runner; wait $runner; break
+  fi
+  if [ $busy = 0 ] && [ $(( $(date +%s) - born )) -ge ${maxAgeSeconds} ]; then
     kill -TERM $runner; wait $runner; break
   fi
   sleep 2
@@ -544,6 +569,10 @@ async function onQueuedJob({ jobId, label, startedAt, starts = 0 }) {
   return false;
 }
 
+export const RATE_LIMIT_DELAY_SECONDS = 300;
+export const rateLimited = (error) =>
+  /^(GitHub .*HTTP (403|429)|Boat .*HTTP 429)\b/.test(String(error?.message));
+
 async function onQueue(event) {
   const failures = [];
   for (const record of event.Records) {
@@ -558,6 +587,12 @@ async function onQueue(event) {
           message: String(error.message),
         })
       );
+      // Rate limited (GitHub 403/429, Boat 429): retrying every 20 s only
+      // keeps the limit pinned, so look again in 5 minutes.
+      if (rateLimited(error)) {
+        await sendJob(JSON.parse(record.body), RATE_LIMIT_DELAY_SECONDS);
+        continue;
+      }
       failures.push({ itemIdentifier: record.messageId });
     }
   }

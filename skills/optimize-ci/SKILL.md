@@ -98,7 +98,9 @@ left on the bill is machines waiting for work, so the warm pool follows
 working hours. What's left of the slow tail is a runner's first job, so a
 nightly job on main builds a warm snapshot with the dependencies and
 toolchains already installed (`references/boat-runners.md`, with the
-autoscaler in `scripts/boat-runners/`). Runner sizing and sharding are in
+autoscaler in `scripts/boat-runners/`). Count sandbox starts per day before
+you put frequent jobs on single-use runners: the day budget is a rolling
+window, and when it runs out nothing starts. Runner sizing and sharding are in
 `references/runners.md`.
 
 ## Before you change anything

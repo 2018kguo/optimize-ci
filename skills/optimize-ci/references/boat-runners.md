@@ -170,8 +170,19 @@ migrations, image publishing, environment-protected jobs, and
 with an `environment:` uses a `-once` label.
 
 PR jobs that read ordinary repository secrets gain little from this, since a
-PR can read those by editing a workflow. `-once` jobs pay the cold start
-every time; deploys are rare enough that this is fine.
+PR can read those by editing a workflow.
+
+`-once` jobs pay a cold start and one sandbox start every time. Count how
+often they run before you move them: a deploy that runs on every merge and
+on a schedule, with a plan job that usually finds nothing to ship, can use
+most of a day's start budget by itself. Put the light jobs (plan, migration
+checks, the apply step) on GitHub-hosted runners, which are also fresh per
+job and cost no sandbox start, and keep only the heavy builds on `-once`.
+
+A reused runner also lives as long as jobs keep arriving, so one job that
+breaks the machine (system packages, a full disk) fails every job after it.
+Cap a reused runner's age: past a few hours, it exits at its next idle
+moment and the controller starts a fresh one.
 
 ## 6. Mistakes to avoid
 
@@ -277,6 +288,18 @@ every time; deploys are rare enough that this is fine.
   with per-minute, per-hour and per-day budgets by plan (`GET /limits`). One
   sandbox per job uses them up on a busy day; reused runners start per
   burst. Cap concurrent starts in the worker.
+- **The day budget is a rolling 24 hours.** When it runs out, nothing
+  starts until earlier starts age out, and every job that needs a new
+  sandbox waits, deploys included. Sum your starts per day from the
+  controller's logs and keep them well under the plan's limit, alarm on
+  `starts.day.remaining` from `GET /limits`, and keep your previous runner provider one revert away
+  (a label swap) for the day it runs out.
+- **A backlog must not feed itself.** While starts are refused, every waiting
+  job retries. Requeue a waiting job at most once per message lifetime, not
+  on every scheduled pass (each requeue is a fresh start budget for that
+  job), and back off for minutes on rate-limit errors (GitHub 403 or 429,
+  Boat 429). Retrying every few seconds uses up GitHub's hourly API limit
+  for the app, and then even the jobs that could run can't be started.
 - **Hosts vary.** The same build can be slower on one host than another, and
   you can't pick. Compare medians of several runs.
 

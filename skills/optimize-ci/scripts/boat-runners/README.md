@@ -105,6 +105,12 @@ Check these once, a few minutes after the first apply:
 - A runner online but never taking jobs: the job asks for a label the runner
   doesn't have.
 - Boat's start limits: `curl -s https://boat.dev/api/v1/limits -H "Authorization: Bearer $KEY"`.
+  `starts.day` is a rolling 24 hours; at zero nothing starts until earlier
+  starts age out. Swap your workflows back to your previous provider's labels
+  until it recovers, and move frequent light `-once` jobs to GitHub-hosted
+  runners.
+- `runner.retry` lines about rate limits come back after 5 minutes, not 20
+  seconds, and a waiting job is requeued once per 30 minutes.
 - The App's recent webhook deliveries: App settings, Advanced. A dropped
   delivery is picked up by the schedule within a few minutes
   (`job.requeued_missed` in the log).

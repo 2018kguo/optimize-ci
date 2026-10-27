@@ -20,6 +20,7 @@ import {
   inHourWindow,
   jobLabel,
   missedJobs,
+  rateLimited,
   orphanSandboxes,
   safetyTtl,
   nextStep,
@@ -143,6 +144,7 @@ function boot({
   jobSeconds = 2,
   runsOn = "boat-4vcpu",
   jobPasses = false,
+  maxAge = undefined,
 }) {
   const home = mkdtempSync(path.join(tmpdir(), "boat-runner-"));
   const runner = path.join(home, "actions-runner");
@@ -180,7 +182,7 @@ while true; do sleep 0.2; done
   const started = Date.now();
   execFileSync(
     "bash",
-    ["-c", runnerScript("acme/app", runsOn, idle, "gh-runner")],
+    ["-c", runnerScript("acme/app", runsOn, idle, "gh-runner", maxAge)],
     {
       env: {
         HOME: home,
@@ -219,6 +221,24 @@ test("the idle window restarts when a job ends", () => {
     seconds >= 5,
     `stopped after ${seconds}s, before the job's idle window ended`
   );
+});
+
+test("a runner past its age stops at its next idle moment, never mid-job", () => {
+  // Age limit 3 s, job from ~1s to ~5s, idle window far away: the stop must
+  // wait for the job to end, then come from the age limit.
+  const { events, seconds } = boot({
+    idle: 60,
+    maxAge: 3,
+    jobAt: 1,
+    jobSeconds: 4,
+  });
+  assert.deepEqual(events, [
+    "configured",
+    "job-done",
+    "listener-stopped",
+    "stop bx_test",
+  ]);
+  assert.ok(seconds >= 5 && seconds < 20, `stopped after ${seconds}s`);
 });
 
 test("a -once runner takes one job, then its sandbox stops", () => {
@@ -423,6 +443,38 @@ test("only boat jobs queued past the grace count as missed webhooks", () => {
   assert.deepEqual(ids, ["boat-4vcpu:queued"]);
 });
 
+test("a job still queued is requeued once per message lifetime, not every pass", () => {
+  const created = Date.parse("2026-01-05T12:00:00Z");
+  const job = {
+    status: "queued",
+    labels: ["boat-4vcpu"],
+    created_at: "2026-01-05T12:00:00Z",
+  };
+  // One schedule pass every 2 minutes for 3 hours.
+  let requeues = 0;
+  for (let minute = 0; minute <= 180; minute += 2) {
+    requeues += missedJobs([job], created + minute * 60_000 + 30_000).length;
+  }
+  assert.equal(requeues, 6);
+});
+
+test("only rate-limit errors back off", () => {
+  for (const message of [
+    "GitHub GET /repos/a/b/actions/runners?per_page=100&page=1: HTTP 403",
+    "GitHub installation token: HTTP 429",
+    "Boat POST /sandboxes: HTTP 429 rate_limited",
+  ]) {
+    assert.ok(rateLimited(new Error(message)), message);
+  }
+  for (const message of [
+    "Boat POST /sandboxes: HTTP 403 forbidden",
+    "GitHub GET /repos/a/b/actions/jobs/1: HTTP 404",
+    "fetch failed",
+  ]) {
+    assert.ok(!rateLimited(new Error(message)), message);
+  }
+});
+
 test("the runner registers only after the sandbox reports hydrated", () => {
   const home = mkdtempSync(path.join(tmpdir(), "boat-hydrate-"));
   const runner = path.join(home, "actions-runner");
@@ -617,7 +669,8 @@ test("a snapshot job's run must be main's schedule or dispatch of the workflow i
 });
 
 test("missed snapshot jobs are requeued and their stale registrations removed", () => {
-  const old = new Date(Date.now() - 10 * 60_000).toISOString();
+  // Inside the first requeue slot (5-7 minutes queued).
+  const old = new Date(Date.now() - 6 * 60_000).toISOString();
   const jobs = [
     {
       status: "queued",
