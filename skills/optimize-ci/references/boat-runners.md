@@ -167,7 +167,8 @@ runner (`config.sh --ephemeral`), runs one job and is erased. Put every job
 that holds credentials a PR can't otherwise reach on it: deploys, production
 migrations, image publishing, environment-protected jobs, and
 `pull_request_target` jobs with a privileged token. Add a test that every job
-with an `environment:` uses a `-once` label.
+with an `environment:` uses a `-once` label or a GitHub-hosted runner, never a
+reused one.
 
 PR jobs that read ordinary repository secrets gain little from this, since a
 PR can read those by editing a workflow.
@@ -394,7 +395,7 @@ what the first runs surface:
 
 Then lock it in with tests over the workflow files: every PR job uses a
 `boat-*` label, every checkout uses `clean: false`, no steps from the old
-provider remain, every `environment:` job uses `-once`, sparse checkouts use
+provider remain, every `environment:` job uses `-once` or GitHub-hosted, sparse checkouts use
 their own directory, and `pip install` runs in a virtualenv.
 
 ## 9. What it costs

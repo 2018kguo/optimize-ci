@@ -20,7 +20,9 @@ controller serves one repository.
 Only use reused runners where everyone who can trigger workflows is trusted:
 a private repository, or a public one that requires approval before
 workflows run on fork PRs. Put jobs with deploy credentials on `-once`
-labels. The job-started hook removes every docker container on the machine,
+labels or GitHub-hosted runners. Each `-once` job is one sandbox start, so
+keep frequent light ones (deploy plans, migration checks, scheduled deploys)
+on GitHub-hosted and only heavy builds on `-once`. The job-started hook removes every docker container on the machine,
 so run nothing else on these sandboxes.
 
 ## Setup
