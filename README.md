@@ -1,4 +1,10 @@
-# optimize-ci
+<h1 align="center">optimize-ci</h1>
+<p align="center">A practical playbook for faster, cheaper CI.</p>
+<p align="center">
+  <a href="#use-it">Use the skill</a> ·
+  <a href="#what-we-changed">The approach</a> ·
+  <a href="#whats-in-it">What is included</a>
+</p>
 
 A playbook for making CI on a busy repository faster and cheaper without
 letting more bugs through. It comes from a TypeScript monorepo where coding
@@ -10,12 +16,14 @@ each change from undoing itself, the defaults agents still reach for
 that cost the most, and the runner autoscaler we moved to when we left
 Blacksmith for [Boat](https://docs.boat.dev).
 
-Our stack was Bun, Node 24, TypeScript, Turbo, Vitest, node:test, bun test,
+Our stack was Bun, Node, TypeScript, Turbo, Vitest, node:test, bun test,
 Playwright, Postgres and GitHub Actions. If yours is different, most of it
 still applies: measuring, profiling the tests, picking tests per diff, git
 and cache fixes and the guardrails don't depend on the language or the
 runner provider. The skill starts by measuring your CI and working out
 which of its steps your setup needs.
+
+## Use it
 
 ```bash
 npx skills add 2018kguo/optimize-ci
